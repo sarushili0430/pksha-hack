@@ -40,8 +40,10 @@ jobs:
           else
             git commit -m "chore: update requirements.txt via uv"
             if [ "${{ github.event_name }}" = "pull_request" ]; then
+              git pull origin ${{ github.head_ref }} --rebase
               git push origin HEAD:${{ github.head_ref }}
             else
+              git pull origin ${{ github.ref_name }} --rebase
               git push origin HEAD:${{ github.ref_name }}
             fi
           fi
