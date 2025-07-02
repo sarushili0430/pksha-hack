@@ -67,7 +67,7 @@ app = FastAPI()
 async def health():
     return {"status": "ok"}
 
-@app.post("/callback")
+@app.post("/api/webhook")
 async def callback(request: Request):
     signature = request.headers.get("X-Line-Signature", "")
     body      = (await request.body()).decode("utf-8")
