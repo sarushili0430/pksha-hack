@@ -1,3 +1,38 @@
+"""
+LINE Bot + LangChain + Supabase 統合アプリケーション
+
+このアプリケーションは、LINEメッセージを受信してOpenAI GPT-4で応答を生成し、
+Supabaseデータベースにユーザー・グループ・メッセージ情報を保存するシステムです。
+
+【メッセージ受信からLLM呼び出しまでの処理フロー】
+
+1. Webhookエンドポイント (/api/webhook)
+   ↓ LINEからのメッセージWebhookを受信
+   
+2. メッセージイベントハンドラ (@handler.add デコレータ)
+   ↓ on_message() - LINE SDKによるルーティング
+   
+3. 非同期メッセージ処理 
+   ↓ process_message_async() - 並列処理でタスクを実行
+   
+4. LLM応答生成
+   ↓ generate_response_async() - OpenAI GPT-4への実際の呼び出し
+   
+5. LangChainチェーン実行
+   ↓ chat_chain.invoke() - プロンプトテンプレートでGPT-4実行
+
+【並列処理の特徴】
+- ユーザー作成、グループ作成、LLM呼び出しを同時実行
+- エラーハンドリングでデフォルト応答を保証
+- run_in_executor()で同期処理を非同期化
+
+【データベース構造】
+- users: LINEユーザー情報
+- groups: LINEグループ情報  
+- group_members: グループとユーザーの多対多関係
+- messages: メッセージログとLINE生データ
+"""
+
 import os
 import asyncio
 from typing import Optional, List
@@ -23,10 +58,9 @@ from linebot.v3.messaging import (
 )
 from linebot.v3.messaging.rest import ApiException
 
-# ------ LangChain ------
-from langchain_openai import ChatOpenAI        # OpenAI ラッパー
-from langchain.prompts import ChatPromptTemplate
-from langchain.chains import LLMChain
+# ------ 分離されたサービス ------
+from ai_service import get_ai_service
+from message_service import get_message_service
 
 # =========================
 # 0. 環境変数
@@ -52,6 +86,9 @@ if not (SECRET and TOKEN and OPENAI and SUPABASE_URL and SUPABASE_KEY):
 # =========================
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# MessageService を初期化
+message_service = get_message_service(supabase)
+
 # =========================
 # 1. LINE SDK v3 初期化
 # =========================
@@ -62,20 +99,11 @@ handler   = WebhookHandler(SECRET)          # 署名検証用
 #     messaging_api = MessagingApi(api_client)
 
 # =========================
-# 2. LangChain セットアップ
+# 2. 分離されたサービスの初期化
 # =========================
-llm = ChatOpenAI(
-    model_name="gpt-4.1-2025-04-14",     # もちろん gpt-4o / 3.5 も可
-    temperature=0.7,
-    openai_api_key=OPENAI
-)
-
-system_prompt = "あなたは親切なアシスタントです。"
-prompt = ChatPromptTemplate.from_messages([
-    ("system", system_prompt),
-    ("human", "{input}"),
-])
-chat_chain = LLMChain(llm=llm, prompt=prompt)
+# AIService（LLM処理）とMessageService（履歴管理）を初期化
+ai_service = get_ai_service(OPENAI)
+# message_service は supabase 初期化後に設定
 
 # =========================
 # 3. FastAPI アプリ
@@ -119,14 +147,21 @@ async def sync_group_members_endpoint(request: Request, background_tasks: Backgr
         print(f"Error in sync_group_members_endpoint: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# =========================
+# 【フロー1】Webhookエンドポイント
+# =========================
 @app.post("/api/webhook")
 async def callback(request: Request):
+    """
+    LINEからのメッセージWebhookを受信するエンドポイント
+    署名検証後、LINE SDKのhandlerにルーティングする
+    """
     signature = request.headers.get("X-Line-Signature", "")
     body      = (await request.body()).decode("utf-8")
 
     # LINE 署名検証 & ルーティング（handler 内でデコレータに飛ぶ）
     try:
-        handler.handle(body, signature)
+        handler.handle(body, signature)  # → 【フロー2】on_message() へ
     except InvalidSignatureError:
         raise HTTPException(status_code=400, detail="Invalid signature")
 
@@ -170,20 +205,7 @@ async def get_or_create_group(line_group_id: str):
         print(f"Error in get_or_create_group: {e}")
         raise
 
-async def save_message(user_id: str, group_id: str, message_type: str, text_content: str, raw_payload: dict):
-    try:
-        message_data = {
-            "user_id": user_id,
-            "group_id": group_id,
-            "message_type": message_type,
-            "text_content": text_content,
-            "raw_payload": raw_payload,
-            "created_at": datetime.now(timezone.utc).isoformat()
-        }
-        supabase.table("messages").insert(message_data).execute()
-    except Exception as e:
-        print(f"Error in save_message: {e}")
-        raise
+# save_message 関数は message_service.save_message() に移行済み
 
 async def get_group_members(line_group_id: str):
     """
@@ -287,13 +309,17 @@ async def sync_group_members_background(line_group_id: str, group_id: str):
     except Exception as e:
         print(f"Background sync failed for group {line_group_id}: {e}")
 
+# =========================
+# 【フロー2】メッセージイベントハンドラ
+# =========================
 @handler.add(MessageEvent, message=TextMessageContent)
 def on_message(event: MessageEvent):
     """
-    LINEメッセージイベントハンドラ（同期処理で即座に応答）
+    LINEメッセージイベントハンドラ（LINE SDKデコレータによるルーティング）
+    同期処理で即座に応答し、非同期タスクを作成して処理を移行
     """
     try:
-        # 非同期処理を同期的に実行
+        # 非同期処理に移行 → 【フロー3】process_message_async() へ
         asyncio.create_task(process_message_async(event))
         
     except Exception as e:
@@ -310,13 +336,27 @@ def on_message(event: MessageEvent):
         except Exception as reply_error:
             print(f"Failed to send error reply: {reply_error}")
 
+# =========================
+# 【フロー3】非同期メッセージ処理
+# =========================
 async def process_message_async(event: MessageEvent):
     """
     メッセージ処理の非同期実装
+    ユーザー作成、グループ作成、LLM呼び出しを並列処理で実行
     """
     try:
+        # TextMessageContentかどうかを確認
+        if not isinstance(event.message, TextMessageContent):
+            print("Non-text message received, skipping...")
+            return
+            
         user_text = event.message.text
         print(f"Received message: {user_text}")
+        
+        # reply_tokenが存在しない場合はエラー
+        if not event.reply_token:
+            print("No reply token found, cannot respond")
+            return
         
         # 並列処理用のタスクを準備
         tasks = []
@@ -328,15 +368,13 @@ async def process_message_async(event: MessageEvent):
         
         # グループメッセージかどうかチェック
         group_id = None
-        line_group_id = None
-        if hasattr(event.source, 'group_id') and event.source.group_id:
-            line_group_id = event.source.group_id
+        line_group_id = getattr(event.source, 'group_id', None)
+        if line_group_id:
             group_task = get_or_create_group(line_group_id)
             tasks.append(("group", group_task))
         
-        # LangChain で応答生成（非同期）
-        llm_task = asyncio.create_task(generate_response_async(user_text))
-        tasks.append(("llm", llm_task))
+        # 【★重要】AI応答生成タスクを準備（履歴は後で取得）
+        # この時点ではタスクを作成せず、後で履歴と一緒に処理
         
         # 並列実行
         results = {}
@@ -351,7 +389,19 @@ async def process_message_async(event: MessageEvent):
         
         user_id = results.get("user")
         group_id = results.get("group")
-        reply_text = results.get("llm", "申し訳ございません。応答の生成に失敗しました。")
+        
+        # ユーザーIDが取得できない場合はエラー
+        if not user_id:
+            raise Exception("User ID could not be obtained")
+        
+        # 【フロー4】履歴取得 + LLM応答生成
+        history = ""
+        if group_id:
+            # グループの場合は過去メッセージ履歴を取得
+            history = await message_service.get_recent_messages_for_llm(group_id, max_messages=1000)
+        
+        # AI応答生成（履歴付き）
+        reply_text = await ai_service.generate_response_async(user_text, history)
         
         # グループメンバー同期（バックグラウンド実行）
         if line_group_id and group_id:
@@ -371,7 +421,7 @@ async def process_message_async(event: MessageEvent):
         }
         
         # メッセージ保存と返信を並列実行
-        save_task = save_message(user_id, group_id, "text", user_text, raw_payload)
+        save_task = message_service.save_message(user_id, group_id, "text", user_text, raw_payload)
         reply_task = send_reply_async(event.reply_token, reply_text)
         
         await asyncio.gather(save_task, reply_task, return_exceptions=True)
@@ -385,20 +435,7 @@ async def process_message_async(event: MessageEvent):
         except Exception as reply_error:
             print(f"Failed to send error reply: {reply_error}")
 
-async def generate_response_async(user_text: str) -> str:
-    """
-    LangChainでの応答生成（非同期ラッパー）
-    """
-    try:
-        # LangChainの同期処理を非同期で実行
-        loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(None, chat_chain.invoke, {"input": user_text})
-        reply_text = response["text"]
-        print(f"Generated reply: {reply_text}")
-        return reply_text
-    except Exception as e:
-        print(f"Error generating response: {e}")
-        return "申し訳ございません。応答の生成に失敗しました。"
+# 【フロー4】LLM応答生成は ai_service.generate_response_async() に移行済み
 
 async def send_reply_async(reply_token: str, text: str):
     """
