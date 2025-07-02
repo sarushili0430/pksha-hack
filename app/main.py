@@ -1,8 +1,11 @@
 import os
+import asyncio
+from typing import Optional, List
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 from supabase import create_client, Client
 from datetime import datetime, timezone
+import time
 
 # ------ LINE v3 SDK ------
 from linebot.v3 import WebhookHandler          # 署名検証 & ルーティング
@@ -84,24 +87,33 @@ async def health():
     return {"status": "ok"}
 
 @app.post("/api/sync-group-members")
-async def sync_group_members_endpoint(request: Request):
+async def sync_group_members_endpoint(request: Request, background_tasks: BackgroundTasks):
     """
-    手動でグループメンバーを同期するためのエンドポイント
+    手動でグループメンバーを同期するためのエンドポイント（非同期処理）
     """
     try:
         data = await request.json()
         line_group_id = data.get("line_group_id")
+        force_sync = data.get("force_sync", False)
         
         if not line_group_id:
             raise HTTPException(status_code=400, detail="line_group_id is required")
         
         # グループを取得または作成
-        group_id = get_or_create_group(line_group_id)
+        group_id = await get_or_create_group(line_group_id)
         
-        # メンバーを同期
-        sync_group_members(line_group_id, group_id)
+        # 強制同期の場合はキャッシュをクリア
+        if force_sync and line_group_id in _group_sync_cache:
+            del _group_sync_cache[line_group_id]
         
-        return {"status": "success", "message": f"Group members synced for {line_group_id}"}
+        # バックグラウンドでメンバー同期を実行
+        background_tasks.add_task(sync_group_members_background, line_group_id, group_id)
+        
+        return {
+            "status": "success", 
+            "message": f"Group member sync started for {line_group_id}",
+            "force_sync": force_sync
+        }
         
     except Exception as e:
         print(f"Error in sync_group_members_endpoint: {e}")
@@ -124,7 +136,7 @@ async def callback(request: Request):
 # =========================
 # 4. LINE Webhook ハンドラ
 # =========================
-def get_or_create_user(line_user_id: str):
+async def get_or_create_user(line_user_id: str):
     try:
         result = supabase.table("users").select("id").eq("line_user_id", line_user_id).execute()
         
@@ -141,7 +153,7 @@ def get_or_create_user(line_user_id: str):
         print(f"Error in get_or_create_user: {e}")
         raise
 
-def get_or_create_group(line_group_id: str):
+async def get_or_create_group(line_group_id: str):
     try:
         result = supabase.table("groups").select("id").eq("line_group_id", line_group_id).execute()
         
@@ -158,7 +170,7 @@ def get_or_create_group(line_group_id: str):
         print(f"Error in get_or_create_group: {e}")
         raise
 
-def save_message(user_id: str, group_id: str, message_type: str, text_content: str, raw_payload: dict):
+async def save_message(user_id: str, group_id: str, message_type: str, text_content: str, raw_payload: dict):
     try:
         message_data = {
             "user_id": user_id,
@@ -173,7 +185,7 @@ def save_message(user_id: str, group_id: str, message_type: str, text_content: s
         print(f"Error in save_message: {e}")
         raise
 
-def get_group_members(line_group_id: str):
+async def get_group_members(line_group_id: str):
     """
     LINEグループのメンバーIDリストを取得
     """
@@ -189,20 +201,50 @@ def get_group_members(line_group_id: str):
         print(f"Unexpected error getting group members: {e}")
         raise
 
-def sync_group_members(line_group_id: str, group_id: str):
+# グループメンバー同期の頻度制御用キャッシュ
+_group_sync_cache = {}
+SYNC_COOLDOWN_SECONDS = 300  # 5分間のクールダウン
+
+async def sync_group_members(line_group_id: str, group_id: str):
     """
-    LINEグループのメンバーをgroup_membersテーブルに同期
+    LINEグループのメンバーをgroup_membersテーブルに同期（頻度制御付き）
     """
     try:
+        # 頻度制御チェック
+        current_time = time.time()
+        last_sync = _group_sync_cache.get(line_group_id, 0)
+        
+        if current_time - last_sync < SYNC_COOLDOWN_SECONDS:
+            print(f"Skipping sync for group {line_group_id} - too frequent (last: {int(current_time - last_sync)}s ago)")
+            return
+        
         # LINEからメンバーIDリストを取得
-        member_ids = get_group_members(line_group_id)
+        member_ids = await get_group_members(line_group_id)
+        
+        if not member_ids:
+            print(f"No members found for group {line_group_id}")
+            return
+            
         print(f"Found {len(member_ids)} members in group {line_group_id}")
         
+        # 非同期でユーザー作成処理を並列実行
+        user_tasks = []
         for line_user_id in member_ids:
-            # ユーザーをusersテーブルに追加（存在しない場合）
-            user_id = get_or_create_user(line_user_id)
-            
-            # group_membersテーブルに追加（既に存在する場合はスキップ）
+            task = get_or_create_user(line_user_id)
+            user_tasks.append((line_user_id, task))
+        
+        # 全ユーザーの作成/取得を並列実行
+        user_results = {}
+        for line_user_id, task in user_tasks:
+            try:
+                user_id = await task
+                user_results[line_user_id] = user_id
+            except Exception as e:
+                print(f"Error creating/getting user {line_user_id}: {e}")
+                continue
+        
+        # group_membersテーブルへの追加処理
+        for line_user_id, user_id in user_results.items():
             try:
                 # 既存のメンバーシップをチェック
                 existing = supabase.table("group_members").select("*").eq("group_id", group_id).eq("user_id", user_id).execute()
@@ -227,35 +269,95 @@ def sync_group_members(line_group_id: str, group_id: str):
             except Exception as e:
                 print(f"Error adding member {line_user_id} to group: {e}")
                 continue
+        
+        # 同期完了をキャッシュに記録
+        _group_sync_cache[line_group_id] = current_time
+        print(f"Group member sync completed for {line_group_id}")
                 
     except Exception as e:
         print(f"Error syncing group members: {e}")
         raise
 
+async def sync_group_members_background(line_group_id: str, group_id: str):
+    """
+    バックグラウンドでグループメンバーを同期
+    """
+    try:
+        await sync_group_members(line_group_id, group_id)
+    except Exception as e:
+        print(f"Background sync failed for group {line_group_id}: {e}")
+
 @handler.add(MessageEvent, message=TextMessageContent)
 def on_message(event: MessageEvent):
+    """
+    LINEメッセージイベントハンドラ（同期処理で即座に応答）
+    """
+    try:
+        # 非同期処理を同期的に実行
+        asyncio.create_task(process_message_async(event))
+        
+    except Exception as e:
+        print(f"Error in on_message: {e}")
+        # エラー時の返信
+        try:
+            with ApiClient(cfg) as api_client:
+                MessagingApi(api_client).reply_message(
+                    ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[TextMessage(text="申し訳ございません。エラーが発生しました。")]
+                    )
+                )
+        except Exception as reply_error:
+            print(f"Failed to send error reply: {reply_error}")
+
+async def process_message_async(event: MessageEvent):
+    """
+    メッセージ処理の非同期実装
+    """
     try:
         user_text = event.message.text
         print(f"Received message: {user_text}")
         
-        # ユーザー情報を取得・作成
+        # 並列処理用のタスクを準備
+        tasks = []
+        
+        # ユーザー情報を取得・作成（非同期）
         line_user_id = event.source.user_id
-        user_id = get_or_create_user(line_user_id)
+        user_task = get_or_create_user(line_user_id)
+        tasks.append(("user", user_task))
         
         # グループメッセージかどうかチェック
         group_id = None
+        line_group_id = None
         if hasattr(event.source, 'group_id') and event.source.group_id:
             line_group_id = event.source.group_id
-            group_id = get_or_create_group(line_group_id)
-            
-            # グループメンバーを同期
-            try:
-                sync_group_members(line_group_id, group_id)
-            except Exception as e:
-                print(f"Failed to sync group members: {e}")
-                # メンバー同期に失敗してもメッセージ処理は続行
+            group_task = get_or_create_group(line_group_id)
+            tasks.append(("group", group_task))
         
-        # メッセージをSupabaseに保存
+        # LangChain で応答生成（非同期）
+        llm_task = asyncio.create_task(generate_response_async(user_text))
+        tasks.append(("llm", llm_task))
+        
+        # 並列実行
+        results = {}
+        for task_name, task in tasks:
+            try:
+                result = await task
+                results[task_name] = result
+            except Exception as e:
+                print(f"Error in {task_name} task: {e}")
+                if task_name == "user":
+                    raise  # ユーザー作成は必須
+        
+        user_id = results.get("user")
+        group_id = results.get("group")
+        reply_text = results.get("llm", "申し訳ございません。応答の生成に失敗しました。")
+        
+        # グループメンバー同期（バックグラウンド実行）
+        if line_group_id and group_id:
+            asyncio.create_task(sync_group_members_background(line_group_id, group_id))
+        
+        # メッセージをSupabaseに保存（非同期）
         raw_payload = {
             "type": event.type,
             "message": {
@@ -268,30 +370,56 @@ def on_message(event: MessageEvent):
             "reply_token": event.reply_token
         }
         
-        save_message(user_id, group_id, "text", user_text, raw_payload)
-
-        # LangChain で応答生成
-        response = chat_chain.invoke({"input": user_text})
-        reply_text = response["text"]  # LLMChainの結果から"text"キーを取得
-        print(f"Generated reply: {reply_text}")
-
-        # LINE へ返信
-        with ApiClient(cfg) as api_client:
-            MessagingApi(api_client).reply_message(
-                ReplyMessageRequest(
-                    reply_token=event.reply_token,
-                    messages=[TextMessage(text=reply_text)]
-                )
-            )
-        print("Reply sent successfully")
+        # メッセージ保存と返信を並列実行
+        save_task = save_message(user_id, group_id, "text", user_text, raw_payload)
+        reply_task = send_reply_async(event.reply_token, reply_text)
+        
+        await asyncio.gather(save_task, reply_task, return_exceptions=True)
+        print("Message processing completed")
     
     except Exception as e:
-        print(f"Error in on_message: {e}")
+        print(f"Error in process_message_async: {e}")
         # エラー時の返信
-        with ApiClient(cfg) as api_client:
-            MessagingApi(api_client).reply_message(
-                ReplyMessageRequest(
-                    reply_token=event.reply_token,
-                    messages=[TextMessage(text="申し訳ございません。エラーが発生しました。")]
-                )
+        try:
+            await send_reply_async(event.reply_token, "申し訳ございません。エラーが発生しました。")
+        except Exception as reply_error:
+            print(f"Failed to send error reply: {reply_error}")
+
+async def generate_response_async(user_text: str) -> str:
+    """
+    LangChainでの応答生成（非同期ラッパー）
+    """
+    try:
+        # LangChainの同期処理を非同期で実行
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(None, chat_chain.invoke, {"input": user_text})
+        reply_text = response["text"]
+        print(f"Generated reply: {reply_text}")
+        return reply_text
+    except Exception as e:
+        print(f"Error generating response: {e}")
+        return "申し訳ございません。応答の生成に失敗しました。"
+
+async def send_reply_async(reply_token: str, text: str):
+    """
+    LINE返信の非同期実装
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, send_reply_sync, reply_token, text)
+        print("Reply sent successfully")
+    except Exception as e:
+        print(f"Error sending reply: {e}")
+        raise
+
+def send_reply_sync(reply_token: str, text: str):
+    """
+    LINE返信の同期実装
+    """
+    with ApiClient(cfg) as api_client:
+        MessagingApi(api_client).reply_message(
+            ReplyMessageRequest(
+                reply_token=reply_token,
+                messages=[TextMessage(text=text)]
             )
+        )
