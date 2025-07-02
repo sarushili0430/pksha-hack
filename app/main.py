@@ -59,8 +59,8 @@ from linebot.v3.messaging import (
 from linebot.v3.messaging.rest import ApiException
 
 # ------ 分離されたサービス ------
-from ai_service import get_ai_service
-from message_service import get_message_service
+from app.ai_service import get_ai_service
+from app.message_service import get_message_service
 
 # =========================
 # 0. 環境変数
