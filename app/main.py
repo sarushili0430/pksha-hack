@@ -30,6 +30,11 @@ load_dotenv()
 SECRET  = os.getenv("LINE_CHANNEL_SECRET")
 TOKEN   = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 OPENAI  = os.getenv("OPENAI_API_KEY")
+
+print(f"SECRET exists: {bool(SECRET)}")
+print(f"TOKEN exists: {bool(TOKEN)}")
+print(f"OPENAI exists: {bool(OPENAI)}")
+
 if not (SECRET and TOKEN and OPENAI):
     raise RuntimeError(".env の必須キーが不足しています")
 
