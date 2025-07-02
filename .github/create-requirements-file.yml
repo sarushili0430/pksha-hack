@@ -1,0 +1,36 @@
+name: Update requirements.txt on push to main
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  freeze-requirements:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install dependencies using uv
+        run: uv pip install -r requirements.txt
+
+      - name: Freeze dependencies
+        run: uv pip freeze > requirements.txt
+
+      - name: Commit and push changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add requirements.txt
+          git commit -m "chore: update requirements.txt via uv" || echo "No changes to commit"
+          git push
