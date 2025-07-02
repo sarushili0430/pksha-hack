@@ -86,16 +86,32 @@ async def callback(request: Request):
 # =========================
 @handler.add(MessageEvent, message=TextMessageContent)
 def on_message(event: MessageEvent):
-    user_text = event.message.text
+    try:
+        user_text = event.message.text
+        print(f"Received message: {user_text}")
 
-    # LangChain で応答生成
-    reply_text = chat_chain.invoke({"input": user_text})
+        # LangChain で応答生成
+        response = chat_chain.invoke({"input": user_text})
+        reply_text = response["text"]  # LLMChainの結果から"text"キーを取得
+        print(f"Generated reply: {reply_text}")
 
-    # LINE へ返信
-    with ApiClient(cfg) as api_client:
-        MessagingApi(api_client).reply_message(
-            ReplyMessageRequest(
-                reply_token=event.reply_token,
-                messages=[TextMessage(text=reply_text)]
+        # LINE へ返信
+        with ApiClient(cfg) as api_client:
+            MessagingApi(api_client).reply_message(
+                ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[TextMessage(text=reply_text)]
+                )
             )
-        )
+        print("Reply sent successfully")
+    
+    except Exception as e:
+        print(f"Error in on_message: {e}")
+        # エラー時の返信
+        with ApiClient(cfg) as api_client:
+            MessagingApi(api_client).reply_message(
+                ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[TextMessage(text="申し訳ございません。エラーが発生しました。")]
+                )
+            )
