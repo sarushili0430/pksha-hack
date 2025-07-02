@@ -44,11 +44,13 @@ class MessageService:
             メッセージリスト（古い順）
         """
         try:
-            query = self.supabase \
-                .table("messages") \
-                .select("text_content, message_type, created_at") \
-                .eq("group_id", group_id) \
-                .order("created_at", {"ascending": True})
+            query = (
+                self.supabase
+                    .table("messages")
+                    .select("text_content, message_type, created_at")
+                    .eq("group_id", group_id)
+                    .order("created_at", ascending=True)
+            )
             
             # 件数制限がある場合
             if limit:
@@ -116,13 +118,15 @@ class MessageService:
         """
         try:
             # 最近のメッセージを取得（降順で取得して件数制限後、昇順に戻す）
-            result = self.supabase \
-                .table("messages") \
-                .select("text_content, message_type, created_at") \
-                .eq("group_id", group_id) \
-                .order("created_at", {"ascending": False}) \
-                .limit(max_messages) \
-                .execute()
+            result = (
+                self.supabase
+                    .table("messages")
+                    .select("text_content, message_type, created_at")
+                    .eq("group_id", group_id)
+                    .order("created_at", ascending=False)
+                    .limit(max_messages)
+                    .execute()
+            )
             
             recent_messages = result.data
             
@@ -192,4 +196,4 @@ def get_message_service(supabase_client: Client) -> MessageService:
     global _message_service
     if _message_service is None:
         _message_service = MessageService(supabase_client)
-    return _message_service 
+    return _message_service
