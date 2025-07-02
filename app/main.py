@@ -18,6 +18,7 @@ from linebot.v3.messaging import (
     ReplyMessageRequest,
     TextMessage,
 )
+from linebot.v3.messaging.rest import ApiException
 
 # ------ LangChain ------
 from langchain_openai import ChatOpenAI        # OpenAI ラッパー
@@ -81,6 +82,30 @@ app = FastAPI()
 @app.get("/")
 async def health():
     return {"status": "ok"}
+
+@app.post("/api/sync-group-members")
+async def sync_group_members_endpoint(request: Request):
+    """
+    手動でグループメンバーを同期するためのエンドポイント
+    """
+    try:
+        data = await request.json()
+        line_group_id = data.get("line_group_id")
+        
+        if not line_group_id:
+            raise HTTPException(status_code=400, detail="line_group_id is required")
+        
+        # グループを取得または作成
+        group_id = get_or_create_group(line_group_id)
+        
+        # メンバーを同期
+        sync_group_members(line_group_id, group_id)
+        
+        return {"status": "success", "message": f"Group members synced for {line_group_id}"}
+        
+    except Exception as e:
+        print(f"Error in sync_group_members_endpoint: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/webhook")
 async def callback(request: Request):
@@ -148,6 +173,65 @@ def save_message(user_id: str, group_id: str, message_type: str, text_content: s
         print(f"Error in save_message: {e}")
         raise
 
+def get_group_members(line_group_id: str):
+    """
+    LINEグループのメンバーIDリストを取得
+    """
+    try:
+        with ApiClient(cfg) as api_client:
+            messaging_api = MessagingApi(api_client)
+            response = messaging_api.get_group_members_ids(line_group_id)
+            return response.member_ids
+    except ApiException as e:
+        print(f"Error getting group members for {line_group_id}: {e}")
+        raise
+    except Exception as e:
+        print(f"Unexpected error getting group members: {e}")
+        raise
+
+def sync_group_members(line_group_id: str, group_id: str):
+    """
+    LINEグループのメンバーをgroup_membersテーブルに同期
+    """
+    try:
+        # LINEからメンバーIDリストを取得
+        member_ids = get_group_members(line_group_id)
+        print(f"Found {len(member_ids)} members in group {line_group_id}")
+        
+        for line_user_id in member_ids:
+            # ユーザーをusersテーブルに追加（存在しない場合）
+            user_id = get_or_create_user(line_user_id)
+            
+            # group_membersテーブルに追加（既に存在する場合はスキップ）
+            try:
+                # 既存のメンバーシップをチェック
+                existing = supabase.table("group_members").select("*").eq("group_id", group_id).eq("user_id", user_id).execute()
+                
+                if not existing.data:
+                    # 新しいメンバーを追加
+                    member_data = {
+                        "group_id": group_id,
+                        "user_id": user_id,
+                        "joined_at": datetime.now(timezone.utc).isoformat(),
+                        "last_active_at": datetime.now(timezone.utc).isoformat()
+                    }
+                    supabase.table("group_members").insert(member_data).execute()
+                    print(f"Added new member {line_user_id} to group {line_group_id}")
+                else:
+                    # 既存メンバーのlast_active_atを更新
+                    supabase.table("group_members").update({
+                        "last_active_at": datetime.now(timezone.utc).isoformat()
+                    }).eq("group_id", group_id).eq("user_id", user_id).execute()
+                    print(f"Updated last_active_at for member {line_user_id}")
+                    
+            except Exception as e:
+                print(f"Error adding member {line_user_id} to group: {e}")
+                continue
+                
+    except Exception as e:
+        print(f"Error syncing group members: {e}")
+        raise
+
 @handler.add(MessageEvent, message=TextMessageContent)
 def on_message(event: MessageEvent):
     try:
@@ -163,6 +247,13 @@ def on_message(event: MessageEvent):
         if hasattr(event.source, 'group_id') and event.source.group_id:
             line_group_id = event.source.group_id
             group_id = get_or_create_group(line_group_id)
+            
+            # グループメンバーを同期
+            try:
+                sync_group_members(line_group_id, group_id)
+            except Exception as e:
+                print(f"Failed to sync group members: {e}")
+                # メンバー同期に失敗してもメッセージ処理は続行
         
         # メッセージをSupabaseに保存
         raw_payload = {
