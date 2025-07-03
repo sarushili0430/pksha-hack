@@ -368,7 +368,8 @@ async def reminder_loop():
                                             # メンション対象を追加
                                             mention_key = f"member{i}"
                                             mention_targets.append(UserMentionTarget(
-                                                user_id=member_line_user_id
+                                                user_id=member_line_user_id,
+                                                type="user"
                                             ))
                                             mention_text_parts.append(f"{{{mention_key}}}")
                                             print(f"★DEBUG: Added mention target {member_line_user_id}")
