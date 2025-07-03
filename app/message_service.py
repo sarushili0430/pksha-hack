@@ -49,7 +49,7 @@ class MessageService:
                     .table("messages")
                     .select("text_content, message_type, created_at")
                     .eq("group_id", group_id)
-                    .order("created_at", ascending=True)
+                    .order("created_at")
             )
             
             # 件数制限がある場合
@@ -123,7 +123,7 @@ class MessageService:
                     .table("messages")
                     .select("text_content, message_type, created_at")
                     .eq("group_id", group_id)
-                    .order("created_at", ascending=False)
+                    .order("created_at", desc=True)
                     .limit(max_messages)
                     .execute()
             )
