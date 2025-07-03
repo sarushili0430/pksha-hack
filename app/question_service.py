@@ -85,6 +85,8 @@ class QuestionService:
 """
             
             response = await self.ai_service.quick_call(prompt)
+
+            print(response)
             
             try:
                 data = json.loads(response.strip())
