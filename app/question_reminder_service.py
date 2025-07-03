@@ -31,12 +31,13 @@ class QuestionReminderService:
         except Exception as e:
             logger.error(f"Error initializing AI service: {e}")
     
-    async def find_inactive_users_for_questions(self, hours_threshold: int = 2) -> List[Dict]:
+    async def find_inactive_users_for_questions(self, hours_threshold: int = 2, reminder_interval_hours: int = 24) -> List[Dict]:
         """
         質問投稿後に非アクティブなユーザーを検出
         
         Args:
             hours_threshold: 非アクティブと判定する時間（時間）
+            reminder_interval_hours: リマインダーの再送間隔（時間）
             
         Returns:
             List[Dict]: 非アクティブユーザーの情報
@@ -63,7 +64,8 @@ class QuestionReminderService:
                 inactive_members = await self._find_inactive_group_members(
                     question['group_id'], 
                     question['created_at'],
-                    question['users']['line_user_id']
+                    question['users']['line_user_id'],
+                    reminder_interval_hours
                 )
                 
                 for member in inactive_members:
@@ -85,7 +87,7 @@ class QuestionReminderService:
             logger.error(f"Error finding inactive users for questions: {e}")
             return []
     
-    async def _find_inactive_group_members(self, group_id: str, question_created_at: str, questioner_line_user_id: str) -> List[Dict]:
+    async def _find_inactive_group_members(self, group_id: str, question_created_at: str, questioner_line_user_id: str, reminder_interval_hours: int = 24) -> List[Dict]:
         """
         質問投稿後に非アクティブなグループメンバーを検出
         
@@ -93,6 +95,7 @@ class QuestionReminderService:
             group_id: グループの内部ID
             question_created_at: 質問投稿時刻
             questioner_line_user_id: 質問者のLINE User ID（除外対象）
+            reminder_interval_hours: リマインダーの再送間隔（時間）
             
         Returns:
             List[Dict]: 非アクティブメンバーの情報
@@ -107,6 +110,7 @@ class QuestionReminderService:
                 return []
             
             inactive_members = []
+            reminder_cutoff_time = datetime.now() - timedelta(hours=reminder_interval_hours)
             
             for member in members_result.data:
                 user_data = member['users']
@@ -131,17 +135,60 @@ class QuestionReminderService:
                         is_inactive = True
                 
                 if is_inactive:
-                    inactive_members.append({
-                        'line_user_id': user_data['line_user_id'],
-                        'display_name': user_data['display_name'],
-                        'last_active_at': last_active
-                    })
+                    # 既にリマインダーを送信済みか確認
+                    should_send_reminder = await self._should_send_reminder(
+                        member['user_id'], 
+                        reminder_cutoff_time
+                    )
+                    
+                    if should_send_reminder:
+                        inactive_members.append({
+                            'line_user_id': user_data['line_user_id'],
+                            'display_name': user_data['display_name'],
+                            'last_active_at': last_active
+                        })
             
             return inactive_members
             
         except Exception as e:
             logger.error(f"Error finding inactive group members: {e}")
             return []
+    
+    async def _should_send_reminder(self, user_id: str, reminder_cutoff_time: datetime) -> bool:
+        """
+        リマインダーを送信すべきかどうかを判定
+        
+        Args:
+            user_id: ユーザーの内部ID
+            reminder_cutoff_time: リマインダー送信のカットオフ時刻
+            
+        Returns:
+            bool: リマインダーを送信すべきかどうか
+        """
+        try:
+            # 最後のリマインダー送信時刻を取得
+            last_reminder_result = database_service.supabase.table("question_targets").select(
+                "reminded_at"
+            ).eq("target_user_id", user_id).order("reminded_at", desc=True).limit(1).execute()
+            
+            if not last_reminder_result.data:
+                # 一度もリマインダーを送信していない場合は送信
+                return True
+            
+            last_reminded_at = last_reminder_result.data[0]['reminded_at']
+            
+            if not last_reminded_at:
+                # reminded_atがnullの場合は送信
+                return True
+            
+            # 最後のリマインダー送信時刻がカットオフ時刻より前の場合は送信
+            last_reminded_datetime = datetime.fromisoformat(last_reminded_at.replace('Z', '+00:00'))
+            return last_reminded_datetime < reminder_cutoff_time
+            
+        except Exception as e:
+            logger.error(f"Error checking should send reminder: {e}")
+            # エラーの場合はリマインダーを送信
+            return True
     
     async def generate_response_suggestion(self, question_text: str, group_name: str, questioner_name: str) -> str:
         """
@@ -263,19 +310,20 @@ class QuestionReminderService:
         except Exception as e:
             logger.error(f"Error recording reminder sent: {e}")
     
-    async def process_all_inactive_users(self, hours_threshold: int = 2) -> Dict:
+    async def process_all_inactive_users(self, hours_threshold: int = 2, reminder_interval_hours: int = 24) -> Dict:
         """
         すべての非アクティブユーザーに質問リマインダーを送信
         
         Args:
             hours_threshold: 非アクティブと判定する時間（時間）
+            reminder_interval_hours: リマインダーの再送間隔（時間）
             
         Returns:
             Dict: 処理結果の統計
         """
         try:
             # 非アクティブユーザーを検出
-            inactive_users = await self.find_inactive_users_for_questions(hours_threshold)
+            inactive_users = await self.find_inactive_users_for_questions(hours_threshold, reminder_interval_hours)
             
             if not inactive_users:
                 logger.info("No inactive users found for question reminders")

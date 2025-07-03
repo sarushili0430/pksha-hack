@@ -79,12 +79,12 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
 
 @app.post("/api/question-reminders")
 async def trigger_question_reminders():
-    """質問リマインダーを手動で実行"""
+    """質問リマインダーを手動で実行（デモ用: 2分非アクティブ、5分間隔再送）"""
     try:
-        result = await question_reminder_service.process_all_inactive_users()
+        result = await question_reminder_service.process_all_inactive_users(hours_threshold=2/60, reminder_interval_hours=5/60)
         return {
             "success": True,
-            "message": "Question reminders processed successfully",
+            "message": "Question reminders processed successfully (Demo mode: 2min inactive, 5min interval)",
             "data": result
         }
     except Exception as e:
@@ -93,13 +93,14 @@ async def trigger_question_reminders():
 
 @app.get("/api/question-reminders/status")
 async def get_question_reminders_status():
-    """質問リマインダーの対象ユーザーを確認"""
+    """質問リマインダーの対象ユーザーを確認（デモ用: 2分非アクティブ）"""
     try:
-        inactive_users = await question_reminder_service.find_inactive_users_for_questions()
+        inactive_users = await question_reminder_service.find_inactive_users_for_questions(hours_threshold=2/60)
         return {
             "success": True,
             "inactive_users_count": len(inactive_users),
-            "inactive_users": inactive_users
+            "inactive_users": inactive_users,
+            "demo_mode": "2min inactive threshold"
         }
     except Exception as e:
         logger.error(f"Error getting question reminders status: {e}")
