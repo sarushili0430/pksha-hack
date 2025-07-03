@@ -3,7 +3,8 @@ from linebot.v3 import WebhookHandler
 from linebot.v3.messaging import Configuration
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 from linebot.v3.exceptions import InvalidSignatureError
-from app.database_service import database_service
+from app.function_executor import function_executor
+from app.webhook_service import webhook_service
 import os
 import logging
 import json
@@ -42,10 +43,10 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
         # Webhookペイロードをパース
         webhook_payload = json.loads(body.decode("utf-8"))
         
-        # 各イベントに対してバックグラウンドタスクでDB保存を実行
+        # 各イベントに対してバックグラウンドタスクでwebhook処理実行
         for event_data in webhook_payload.get("events", []):
             if event_data.get("type") == "message" and event_data.get("message", {}).get("type") == "text":
-                background_tasks.add_task(database_service.save_message_from_webhook, event_data, webhook_payload)
+                background_tasks.add_task(webhook_service.process_webhook_event, event_data, webhook_payload)
         
         handler.handle(body.decode("utf-8"), signature)
     except InvalidSignatureError:
