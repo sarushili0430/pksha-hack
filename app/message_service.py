@@ -41,6 +41,9 @@ class MessageService:
             bool: 送信成功の場合True、失敗の場合False
         """
         try:
+            # 詳細ログ: 本番で Push 不可の場合でも内容確認できるように出力
+            logger.info(f"[SEND] → USER {user_id}: {message}")
+
             text_message = TextMessage(text=message)
             push_request = PushMessageRequest(to=user_id, messages=[text_message])
             
@@ -67,6 +70,8 @@ class MessageService:
             bool: 送信成功の場合True、失敗の場合False
         """
         try:
+            logger.info(f"[SEND] → GROUP {group_id}: {message}")
+
             text_message = TextMessage(text=message)
             push_request = PushMessageRequest(to=group_id, messages=[text_message])
             

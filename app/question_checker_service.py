@@ -120,6 +120,9 @@ class QuestionCheckerService:
             
             if result.data:
                 logger.info(f"Question saved: {result.data[0]['id']}")
+                logger.info(
+                    f"[SCHEDULE] Question reminder at {remind_at.isoformat()} for group {line_group_id} question='{message_text[:40]}'"
+                )
                 return result.data[0]['id']
             else:
                 logger.error("Failed to save question")

@@ -44,6 +44,7 @@ class MoneyCheckerService:
                     以下のメッセージが「お金の支払いや返済を求めるメッセージ」かどうかを判定してください。
                     「1人5000ずつねー」など、明示的にお金であることが書かれていなくても、LINEのメッセージとして通常支払いを求めているな、
                     と判断した場合は、支払いリクエストとして判定してください。
+                    また、「５人で10000円」など、人数と金額が明示的に書かれている場合は、その人数で割った金額を1人あたりの支払い金額として判定してください。
 
                     メッセージ: "{message_text}"
 
@@ -55,7 +56,7 @@ class MoneyCheckerService:
                     以下のJSON形式で回答してください:
                     {{
                         "is_payment_request": true/false,
-                        "amount": 抽出された金額（数値のみ、不明な場合はnull）,
+                        "amount": 1人あたりが支払うべき金額（数値のみ、不明な場合はnull）,
                         "reason": "判定理由"
                     }}
                     """
@@ -117,6 +118,9 @@ class MoneyCheckerService:
             
             if result.data:
                 logger.info(f"Payment request saved: {result.data[0]['id']}")
+                logger.info(
+                    f"[SCHEDULE] Payment reminder at {remind_at.isoformat()} for group {line_group_id} amount={amount}円"
+                )
             else:
                 logger.error("Failed to save payment request")
                 
