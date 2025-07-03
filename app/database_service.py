@@ -99,7 +99,7 @@ class DatabaseService:
     
     async def _ensure_group_membership(self, user_uuid: str, group_uuid: str) -> None:
         """
-        グループメンバーシップが存在しない場合は作成
+        グループメンバーシップが存在しない場合は作成し、last_active_atを更新
         """
         try:
             result = self.supabase.table("group_members").select("*").eq("user_id", user_uuid).eq("group_id", group_uuid).execute()
@@ -108,10 +108,17 @@ class DatabaseService:
                 membership_data = {
                     "user_id": user_uuid,
                     "group_id": group_uuid,
-                    "joined_at": datetime.now().isoformat()
+                    "joined_at": datetime.now().isoformat(),
+                    "last_active_at": datetime.now().isoformat()
                 }
                 self.supabase.table("group_members").insert(membership_data).execute()
                 logger.info(f"Created group membership: {user_uuid} in {group_uuid}")
+            else:
+                # 既存のメンバーシップのlast_active_atを更新
+                self.supabase.table("group_members").update({
+                    "last_active_at": datetime.now().isoformat()
+                }).eq("user_id", user_uuid).eq("group_id", group_uuid).execute()
+                logger.debug(f"Updated last_active_at for user {user_uuid} in group {group_uuid}")
                 
         except Exception as e:
             logger.error(f"Error ensuring group membership: {e}")
