@@ -15,7 +15,7 @@ async def test_message_service():
     
     # Test data
     test_user_id = "test_user_id"
-    test_group_id = "test_group_id"
+    test_line_group_id = "test_group_id"
     test_message = "Hello! This is a test message."
     
     print("\n1. Testing send_message_to_user...")
@@ -27,7 +27,7 @@ async def test_message_service():
     
     print("\n2. Testing send_message_to_group...")
     try:
-        result = await message_service.send_message_to_group(test_group_id, test_message)
+        result = await message_service.send_message_to_group(test_line_group_id, test_message)
         print(f"   Result: {result}")
     except Exception as e:
         print(f"   Error: {e}")
@@ -42,7 +42,7 @@ async def test_message_service():
     
     print("\n4. Testing send_message_to_group_members...")
     try:
-        results = await message_service.send_message_to_group_members(test_group_id, test_message)
+        results = await message_service.send_message_to_group_members(test_line_group_id, test_message)
         print(f"   Results: {results}")
     except Exception as e:
         print(f"   Error: {e}")

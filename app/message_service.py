@@ -153,12 +153,12 @@ class MessageService:
         logger.info(f"Sent message to {successful_sends}/{len(user_ids)} users")
         return results
 
-    async def send_message_to_group_members(self, group_id: str, message: str, exclude_user_ids: Optional[List[str]] = None) -> List[bool]:
+    async def send_message_to_group_members(self, line_group_id: str, message: str, exclude_user_ids: Optional[List[str]] = None) -> List[bool]:
         """
         グループメンバー全員に個別メッセージを送信
         
         Args:
-            group_id: 対象のLINE Group ID
+            line_group_id: 対象のLINE Group ID
             message: 送信するメッセージテキスト
             exclude_user_ids: 除外するユーザーIDのリスト（オプション）
             
@@ -167,10 +167,10 @@ class MessageService:
         """
         try:
             # グループメンバーを取得
-            member_ids = await line_utils.get_group_members(group_id)
+            member_ids = await line_utils.get_group_members(line_group_id)
             
             if not member_ids:
-                logger.warning(f"No members found for group {group_id}")
+                logger.warning(f"No members found for group {line_group_id}")
                 return []
             
             # 除外するユーザーIDがある場合はフィルタリング
@@ -181,7 +181,7 @@ class MessageService:
             return await self.send_messages_to_multiple_users(member_ids, message)
             
         except Exception as e:
-            logger.error(f"Error sending message to group members {group_id}: {e}")
+            logger.error(f"Error sending message to group members {line_group_id}: {e}")
             return []
 
 # シングルトンインスタンス
