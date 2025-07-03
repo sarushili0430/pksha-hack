@@ -77,22 +77,36 @@ class DatabaseService:
     
     async def _ensure_group_exists(self, line_group_id: str) -> str:
         """
-        グループが存在しない場合は作成し、UUIDを返す
+        グループが存在しない場合は作成し、UUIDを返す。存在していて group_name が空の場合は LINE API から取得して補完。
         """
         try:
-            result = self.supabase.table("groups").select("id").eq("line_group_id", line_group_id).execute()
-            
+            result = self.supabase.table("groups").select("id, group_name").eq("line_group_id", line_group_id).execute()
             if not result.data:
+                # 初めて見るグループ。LINE API から名前を取得
+                from .line_utils import line_utils  # 遅延 import で循環回避
+                summary = await line_utils.get_group_summary(line_group_id)
+                group_name = summary.get("group_name") if summary else None
+
                 group_data = {
                     "line_group_id": line_group_id,
+                    "group_name": group_name,
                     "created_at": datetime.now().isoformat()
                 }
                 insert_result = self.supabase.table("groups").insert(group_data).execute()
-                logger.info(f"Created new group: {line_group_id}")
+                logger.info(f"Created new group: {line_group_id} (name={group_name})")
                 return insert_result.data[0]["id"]
             else:
-                return result.data[0]["id"]
-                
+                group_uuid = result.data[0]["id"]
+                current_name = result.data[0].get("group_name")
+                if not current_name:
+                    # 既存だが名前が空 → 取得して更新
+                    from .line_utils import line_utils
+                    summary = await line_utils.get_group_summary(line_group_id)
+                    new_name = summary.get("group_name") if summary else None
+                    if new_name:
+                        self.supabase.table("groups").update({"group_name": new_name}).eq("id", group_uuid).execute()
+                        logger.info(f"Updated group name for {line_group_id} -> {new_name}")
+                return group_uuid
         except Exception as e:
             logger.error(f"Error ensuring group exists: {e}")
             raise

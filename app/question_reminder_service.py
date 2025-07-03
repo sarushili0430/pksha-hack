@@ -196,7 +196,7 @@ class QuestionReminderService:
             # エラーの場合はリマインダーを送信
             return True
     
-    async def generate_response_suggestion(self, question_text: str, group_name: str, questioner_name: str) -> list[str]:
+    async def generate_response_suggestion(self, question_text: str, group_name: str, questioner_name: str, line_group_id: str) -> list[str]:
         """
         AI を使って LINE 用の自然な返信候補を 4 つ生成し、JSON で受け取る
         戻り値は返信文のみのリスト（長さ 4）
@@ -209,7 +209,17 @@ class QuestionReminderService:
                 "申し訳ない、今回は対応できないです。"
             ]
 
+        # 直近の会話履歴を取得（多すぎてもトークン浪費なので 50 件程度）
+        history_text = await message_service.get_recent_messages_for_llm(line_group_id, limit=50)
+
         prompt = f"""
+以下は LINE グループ「{group_name}」で直近に行われた会話の履歴です。これを踏まえて、返信案を考えてください。
+
+【会話履歴】
+{history_text}
+
+---
+
 返す「精神的ハードルが高い」ラインってありますよね？あなたにはそういう人の代わりに返信を考えてあげて欲しいです。
 誘われたけど微妙に行きたくないケース、謝罪しないといけないケース、こっちは短い返答してるのに永遠に返事してくるケースなどを考えています笑
 そこで、以下の質問に対して、そのまま送れる返信文を、 4 つ提案してください。
@@ -278,7 +288,8 @@ class QuestionReminderService:
             response_suggestion = await self.generate_response_suggestion(
                 inactive_user_info['question_text'],
                 inactive_user_info['group_name'],
-                inactive_user_info['questioner_name']
+                inactive_user_info['questioner_name'],
+                inactive_user_info['line_group_id']
             )
             
             # リマインド本文（回答候補を含めない）

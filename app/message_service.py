@@ -184,5 +184,42 @@ class MessageService:
             logger.error(f"Error sending message to group members {line_group_id}: {e}")
             return []
 
+    async def get_recent_messages_for_llm(self, line_group_id: str, limit: int = 50) -> str:
+        """LLM 用にフォーマットした直近メッセージ履歴を取得（古い→新しい）
+
+        Args:
+            line_group_id: LINE グループ ID
+            limit: 取得件数
+        Returns:
+            str: "ユーザー名: メッセージ" の改行区切り文字列
+        """
+        try:
+            group_res = self.supabase.table("groups").select("id").eq("line_group_id", line_group_id).execute()
+            if not group_res.data:
+                return ""
+            group_uuid = group_res.data[0]["id"]
+
+            msgs_res = (
+                self.supabase.table("messages")
+                .select("text_content, users(display_name)")
+                .eq("group_id", group_uuid)
+                .order("created_at", desc=True)
+                .limit(limit)
+                .execute()
+            )
+            if not msgs_res.data:
+                return ""
+
+            # 逆順にして時系列古い→新しい
+            formatted = []
+            for row in reversed(msgs_res.data):
+                speaker = (row.get("users") or {}).get("display_name") or "匿名"
+                text = row.get("text_content") or ""
+                formatted.append(f"{speaker}: {text}")
+            return "\n".join(formatted)
+        except Exception as e:
+            logger.error(f"Error getting recent messages for LLM: {e}")
+            return ""
+
 # シングルトンインスタンス
 message_service = MessageService()
