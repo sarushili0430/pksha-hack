@@ -13,6 +13,9 @@ from linebot.v3.messaging import (
     MessagingApi,
     PushMessageRequest,
     TextMessage,
+    TextMessageV2,
+    MentionSubstitutionObject,
+    UserMentionTarget,
     FlexMessage,
     FlexContainer
 )
@@ -123,6 +126,25 @@ class PushService:
             print(f"Error sending message to LINE group {line_group_id}: {e}")
             return False
     
+    async def send_to_line_group_with_mentions(self, line_group_id: str, message: str, mention_targets: List[UserMentionTarget]) -> bool:
+        """
+        LINE Group IDに直接メンション付きテキストメッセージを送信
+        
+        Args:
+            line_group_id: 送信先のLINE Group ID
+            message: 送信するテキストメッセージ（{member0}, {member1}, ..., {member5}のような置換キーを含む）
+            mention_targets: メンション対象のリスト（最大6名）
+            
+        Returns:
+            送信成功時True、失敗時False
+        """
+        try:
+            return await self._send_push_message_with_mentions(line_group_id, message, mention_targets)
+            
+        except Exception as e:
+            print(f"Error sending mention message to LINE group {line_group_id}: {e}")
+            return False
+    
     async def send_flex_message(self, target_id: str, alt_text: str, flex_content: FlexContainer) -> bool:
         """
         Flexメッセージを送信
@@ -222,6 +244,54 @@ class PushService:
             return False
         except Exception as e:
             print(f"Error sending push message: {e}")
+            return False
+    
+    async def _send_push_message_with_mentions(self, target_id: str, message: str, mention_targets: List[UserMentionTarget]) -> bool:
+        """
+        メンション付きプッシュメッセージ送信の内部実装
+        
+        Args:
+            target_id: 送信先のID（LINE User ID または LINE Group ID）
+            message: 送信するテキストメッセージ（{member0}, {member1}, ..., {member5}のような置換キーを含む）
+            mention_targets: メンション対象のリスト（最大6名）
+            
+        Returns:
+            送信成功時True、失敗時False
+        """
+        try:
+            with ApiClient(self.configuration) as api_client:
+                messaging_api = MessagingApi(api_client)
+                
+                # メンション置換オブジェクトを作成
+                substitution_objects = []
+                for i, target in enumerate(mention_targets):
+                    substitution_objects.append(
+                        MentionSubstitutionObject(
+                            key=f"member{i}",
+                            target=target
+                        )
+                    )
+                
+                # TextMessageV2を使用してメンション付きメッセージを作成
+                text_message_v2 = TextMessageV2(
+                    text=message,
+                    substitution_objects=substitution_objects
+                )
+                
+                push_request = PushMessageRequest(
+                    to=target_id,
+                    messages=[text_message_v2]
+                )
+                
+                messaging_api.push_message(push_request)
+                print(f"Push message with mentions sent successfully to {target_id}")
+                return True
+                
+        except ApiException as e:
+            print(f"LINE API error sending mention message: {e}")
+            return False
+        except Exception as e:
+            print(f"Error sending mention push message: {e}")
             return False
     
     async def _get_line_user_id(self, user_id: str) -> Optional[str]:
