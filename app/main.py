@@ -61,6 +61,7 @@ from app.ai_service import get_ai_service
 from app.message_service import get_message_service
 from app.push_service import get_push_service
 from app.line_user_profile_service import get_line_user_profile_service
+from app.question_service import get_question_service
 
 # =========================
 # 0. 環境変数
@@ -103,6 +104,11 @@ push_service = get_push_service(TOKEN, supabase)
 # LINE User Profile Service 初期化
 # =========================
 line_user_profile_service = get_line_user_profile_service(TOKEN, supabase)
+
+# =========================
+# Question Service 初期化
+# =========================
+question_service = get_question_service(supabase, ai_service)
 
 # =========================
 # FastAPI アプリ
@@ -366,9 +372,140 @@ async def reminder_loop():
             print("★DEBUG: No reminders due at this time")
         await asyncio.sleep(60)
 
+# ★ADD: 質問リマインド送信ループ
+async def question_reminder_loop():
+    """質問への返答リマインドを送信するループ"""
+    while True:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        print(f"★DEBUG: Checking questions for reminders at {now_iso}")
+        
+        # 期限が来た未解決の質問を取得
+        due_questions = supabase.table("questions") \
+            .select("*") \
+            .lte("remind_at", now_iso) \
+            .is_("resolved_at", "null") \
+            .order("remind_at") \
+            .limit(1) \
+            .execute().data
+        
+        print(f"★DEBUG: Found {len(due_questions)} due question reminders")
+        
+        if due_questions:
+            question = due_questions[0]
+            try:
+                print(f"★DEBUG: Processing question reminder ID: {question['id']}")
+                
+                # 質問に対する返答をチェック
+                response_found = await question_service.check_for_responses(question['id'])
+                
+                if response_found:
+                    print(f"★DEBUG: Question {question['id']} has responses, skipping reminder")
+                else:
+                    # 未返答のターゲットを取得
+                    targets_result = supabase.table("question_targets") \
+                        .select("target_user_id, users(line_user_id)") \
+                        .eq("question_id", question['id']) \
+                        .is_("responded_at", "null") \
+                        .execute()
+                    
+                    if targets_result.data:
+                        # 質問者の情報を取得
+                        questioner_result = supabase.table("users") \
+                            .select("line_user_id") \
+                            .eq("id", question['questioner_user_id']) \
+                            .execute()
+                        
+                        questioner_name = "誰か"
+                        if questioner_result.data:
+                            questioner_line_user_id = questioner_result.data[0]['line_user_id']
+                            questioner_profile = await line_user_profile_service.get_user_profile_with_cache(questioner_line_user_id)
+                            if questioner_profile and questioner_profile.get("display_name"):
+                                questioner_name = questioner_profile["display_name"]
+                        
+                        # グループ名を取得
+                        group_result = supabase.table("groups") \
+                            .select("line_group_id") \
+                            .eq("id", question['group_id']) \
+                            .execute()
+                        
+                        group_name = "グループ"
+                        if group_result.data:
+                            # グループ名の取得は複雑なので、簡易的にIDを使用
+                            group_name = f"グループ({group_result.data[0]['line_group_id'][:8]}...)"
+                        
+                        # 各ターゲットに個別にリマインドを送信
+                        for target in targets_result.data:
+                            if target.get("users"):
+                                target_line_user_id = target["users"]["line_user_id"]
+                                
+                                # 返答提案を生成
+                                response_suggestion = await _generate_response_suggestion(
+                                    question['question_text'], 
+                                    questioner_name
+                                )
+                                
+                                # リマインドメッセージを作成
+                                reminder_text = (
+                                    f"💬 返答リマインド\n\n"
+                                    f"{questioner_name}さんから{group_name}で質問が届いて8時間経過しています。\n\n"
+                                    f"質問内容：\n{question['question_text']}\n\n"
+                                    f"こんな感じで返信しましょうか？\n{response_suggestion}"
+                                )
+                                
+                                print(f"★DEBUG: Sending reminder to {target_line_user_id}")
+                                
+                                # 個人チャットにリマインド送信
+                                success = await push_service.send_to_line_user(target_line_user_id, reminder_text)
+                                
+                                if success:
+                                    print(f"★DEBUG: Sent reminder to {target_line_user_id}")
+                                else:
+                                    print(f"★DEBUG: Failed to send reminder to {target_line_user_id}")
+                    
+                    # 質問を解決済みとしてマーク（リマインド送信完了）
+                    supabase.table("questions").update({
+                        "resolved_at": datetime.now(timezone.utc).isoformat()
+                    }).eq("id", question['id']).execute()
+                    
+                    print(f"★DEBUG: Marked question {question['id']} as resolved after sending reminders")
+                    
+            except Exception as e:
+                print(f"★DEBUG: Question reminder processing failed for ID {question.get('id', 'unknown')}: {e}")
+                # エラーが発生した質問も解決済みとしてマーク（無限ループを防ぐ）
+                try:
+                    supabase.table("questions").update({
+                        "resolved_at": datetime.now(timezone.utc).isoformat()
+                    }).eq("id", question['id']).execute()
+                    print(f"★DEBUG: Marked problematic question as resolved, ID: {question['id']}")
+                except:
+                    pass
+        else:
+            print("★DEBUG: No question reminders due at this time")
+        
+        await asyncio.sleep(60)
+
+async def _generate_response_suggestion(question_text: str, questioner_name: str) -> str:
+    """質問に対する返答提案を生成"""
+    try:
+        prompt = f"""
+以下の質問に対して、自然で適切な返答例を1つ提案してください。
+返答は簡潔で、実際に使いやすいものにしてください。
+
+質問者: {questioner_name}さん
+質問: {question_text}
+
+返答例:"""
+        
+        response = await ai_service.quick_call(prompt)
+        return response.strip()
+    except Exception as e:
+        print(f"Failed to generate response suggestion: {e}")
+        return "了解しました！"
+
 @app.on_event("startup")
 async def startup_event():
     asyncio.create_task(reminder_loop())
+    asyncio.create_task(question_reminder_loop())
 
 
 # =========================
@@ -469,5 +606,36 @@ async def process_message_async(event: MessageEvent):
         except Exception as e:
             print(f"Money detection failed: {e}")
 
+    # ★ADD: 質問判定タスク
+    async def detect_question():
+        # グループメッセージでない場合はスキップ
+        if not group_id:
+            return
+            
+        try:
+            # 質問検出
+            result = await question_service.detect_question_and_targets(user_text, group_id)
+            
+            if result:
+                is_question, target_user_ids, question_content = result
+                
+                if is_question and target_user_ids:
+                    # 質問レコードを作成
+                    question_id = await question_service.create_question_record(
+                        group_id=group_id,
+                        questioner_user_id=user_id,
+                        question_text=question_content,
+                        target_user_ids=target_user_ids,
+                        message_id=message_id
+                    )
+                    
+                    if question_id:
+                        print(f"★ADD: Question created with ID: {question_id}")
+                    else:
+                        print("★ADD: Failed to create question record")
+                        
+        except Exception as e:
+            print(f"Question detection failed: {e}")
+
     # 並列実行
-    await asyncio.gather(save_task, do_reply(), detect_money_request(), return_exceptions=True)
+    await asyncio.gather(save_task, do_reply(), detect_money_request(), detect_question(), return_exceptions=True)
