@@ -6,6 +6,7 @@ from linebot.v3.webhooks import MessageEvent, TextMessageContent
 from linebot.v3.exceptions import InvalidSignatureError
 from app.webhook_service import webhook_service
 from app.reminder_service import reminder_service
+from app.question_reminder_service import question_reminder_service
 import os
 import logging
 import json
@@ -75,6 +76,34 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=500, detail="Internal server error")
     
     return "OK"
+
+@app.post("/api/question-reminders")
+async def trigger_question_reminders():
+    """質問リマインダーを手動で実行"""
+    try:
+        result = await question_reminder_service.process_all_inactive_users()
+        return {
+            "success": True,
+            "message": "Question reminders processed successfully",
+            "data": result
+        }
+    except Exception as e:
+        logger.error(f"Error processing question reminders: {e}")
+        raise HTTPException(status_code=500, detail=f"Error processing question reminders: {str(e)}")
+
+@app.get("/api/question-reminders/status")
+async def get_question_reminders_status():
+    """質問リマインダーの対象ユーザーを確認"""
+    try:
+        inactive_users = await question_reminder_service.find_inactive_users_for_questions()
+        return {
+            "success": True,
+            "inactive_users_count": len(inactive_users),
+            "inactive_users": inactive_users
+        }
+    except Exception as e:
+        logger.error(f"Error getting question reminders status: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting status: {str(e)}")
 
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
