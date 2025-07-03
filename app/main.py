@@ -458,11 +458,12 @@ async def question_reminder_loop():
                 if response_found:
                     print(f"★DEBUG: Question {question['id']} has responses, skipping reminder")
                 else:
-                    # 未返答のターゲットを取得
+                    # 未返答かつ未リマインドのターゲットを取得
                     targets_result = supabase.table("question_targets") \
-                        .select("target_user_id, users(line_user_id)") \
+                        .select("id, target_user_id, users(line_user_id)") \
                         .eq("question_id", question['id']) \
                         .is_("responded_at", "null") \
+                        .is_("reminded_at", "null") \
                         .execute()
                     
                     if targets_result.data:
@@ -494,6 +495,7 @@ async def question_reminder_loop():
                         for target in targets_result.data:
                             if target.get("users"):
                                 target_line_user_id = target["users"]["line_user_id"]
+                                target_record_id = target["id"]
                                 
                                 # 返答提案を生成
                                 response_suggestion = await _generate_response_suggestion(
@@ -515,7 +517,12 @@ async def question_reminder_loop():
                                 success = await push_service.send_to_line_user(target_line_user_id, reminder_text)
                                 
                                 if success:
-                                    print(f"★DEBUG: Sent reminder to {target_line_user_id}")
+                                    # 個人ごとにリマインド送信完了をマーク
+                                    supabase.table("question_targets").update({
+                                        "reminded_at": datetime.now(timezone.utc).isoformat()
+                                    }).eq("id", target_record_id).execute()
+                                    
+                                    print(f"★DEBUG: Sent reminder to {target_line_user_id} and marked as reminded")
                                 else:
                                     print(f"★DEBUG: Failed to send reminder to {target_line_user_id}")
                     
@@ -538,12 +545,12 @@ async def question_reminder_loop():
                     
             except Exception as e:
                 print(f"★DEBUG: Question reminder processing failed for ID {question.get('id', 'unknown')}: {e}")
-                # エラーが発生した質問も解決済みとしてマーク（無限ループを防ぐ）
+                # エラーが発生した質問もリマインド済みとしてマーク（無限ループを防ぐ）
                 try:
                     supabase.table("questions").update({
-                        "resolved_at": datetime.now(timezone.utc).isoformat()
+                        "reminded_at": datetime.now(timezone.utc).isoformat()
                     }).eq("id", question['id']).execute()
-                    print(f"★DEBUG: Marked problematic question as resolved, ID: {question['id']}")
+                    print(f"★DEBUG: Marked problematic question as reminded, ID: {question['id']}")
                 except:
                     pass
         else:
