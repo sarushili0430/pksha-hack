@@ -60,6 +60,7 @@ from linebot.v3.messaging.rest import ApiException
 from app.ai_service import get_ai_service
 from app.message_service import get_message_service
 from app.push_service import get_push_service
+from app.line_user_profile_service import get_line_user_profile_service
 
 # =========================
 # 0. 環境変数
@@ -97,6 +98,11 @@ ai_service = get_ai_service(OPENAI)
 # PushService 初期化
 # =========================
 push_service = get_push_service(TOKEN, supabase)
+
+# =========================
+# LINE User Profile Service 初期化
+# =========================
+line_user_profile_service = get_line_user_profile_service(TOKEN, supabase)
 
 # =========================
 # FastAPI アプリ
@@ -146,6 +152,62 @@ async def send_push_message(request: dict):
         
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+# =========================
+# LINE User Profile API
+# =========================
+@app.get("/api/line-user-profile/{line_user_id}")
+async def get_line_user_profile(line_user_id: str, force_refresh: bool = False):
+    """
+    LINE ユーザーのプロフィール情報を取得
+    
+    Args:
+        line_user_id: LINE ユーザーID (例: U1234567890abcdef)
+        force_refresh: True の場合、キャッシュを無視してLINE APIから取得
+        
+    Returns:
+        {
+            "success": True/False,
+            "data": {
+                "user_id": "U1234567890abcdef",
+                "display_name": "表示名",
+                "picture_url": "プロフィール画像URL",
+                "status_message": "ステータスメッセージ",
+                "language": "言語コード"
+            },
+            "error": "エラーメッセージ（エラー時のみ）"
+        }
+    """
+    try:
+        # LINE User ID の形式チェック
+        if not line_user_id.startswith('U') or len(line_user_id) != 33:
+            return {
+                "success": False,
+                "error": "Invalid LINE user ID format. Expected format: U + 32 characters"
+            }
+        
+        # プロフィール情報を取得
+        profile = await line_user_profile_service.get_user_profile_with_cache(
+            line_user_id, force_refresh=force_refresh
+        )
+        
+        if profile:
+            return {
+                "success": True,
+                "data": profile
+            }
+        else:
+            return {
+                "success": False,
+                "error": "User profile not found or LINE API error"
+            }
+            
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
 
 
 # ★DEL: /api/sync-group-members と関連メンバー同期ロジックをすべて削除
@@ -216,10 +278,15 @@ async def create_money_request(
 async def reminder_loop():
     while True:
         now_iso = datetime.now(timezone.utc).isoformat()
+        print(f"★DEBUG: Checking money_requests at {now_iso}")
+        
         due = supabase.table("money_requests") \
             .select("id, group_id, requester_user_id, amount, remind_at") \
             .lte("remind_at", now_iso) \
             .execute().data
+        
+        print(f"★DEBUG: Found {len(due)} due reminders")
+        
         for row in due:
             try:
                 # LINE Group IDを個別に取得
