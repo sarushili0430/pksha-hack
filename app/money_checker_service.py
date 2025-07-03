@@ -37,31 +37,28 @@ class MoneyCheckerService:
         if not self.ai_service:
             return {"is_payment_request": False, "reason": "AI service not available"}
         
-        try:
-            # まず簡単なキーワード検索で事前フィルタリング
-            payment_keywords = ["払", "お金", "円", "¥", "支払", "請求", "催促", "返", "貸", "借"]
-            if not any(keyword in message_text for keyword in payment_keywords):
-                return {"is_payment_request": False, "reason": "No payment keywords found"}
-            
+        try:        
             # AIを使用した詳細判定
             prompt = f"""
-以下のメッセージが「お金の支払いや返済を求めるメッセージ」かどうかを判定してください。
+                    あなたは、LINE上のお金の支払いや返済を求めるメッセージを判定するAIです。
+                    以下のメッセージが「お金の支払いや返済を求めるメッセージ」かどうかを判定してください。
+                    「1人5000ずつねー」など、明示的にお金であることが書かれていなくても、LINEのメッセージとして通常支払いを求めているな、
+                    と判断した場合は、支払いリクエストとして判定してください。
 
-メッセージ: "{message_text}"
+                    メッセージ: "{message_text}"
 
-判定基準:
-- 明確に金額と支払い/返済の要求が含まれている
-- 飲み会、食事、買い物などの費用の請求
-- 借りたお金の返済要求
-- 割り勘の請求
+                    想定するケース:
+                    - 飲み会、食事、買い物などの費用の請求
+                    - 借りたお金の返済要求
+                    - 割り勘の請求
 
-以下のJSON形式で回答してください:
-{{
-    "is_payment_request": true/false,
-    "amount": 抽出された金額（数値のみ、不明な場合はnull）,
-    "reason": "判定理由"
-}}
-"""
+                    以下のJSON形式で回答してください:
+                    {{
+                        "is_payment_request": true/false,
+                        "amount": 抽出された金額（数値のみ、不明な場合はnull）,
+                        "reason": "判定理由"
+                    }}
+                    """
             
             response = await self.ai_service.quick_call(prompt)
             

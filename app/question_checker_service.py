@@ -36,36 +36,31 @@ class QuestionCheckerService:
         if not self.ai_service:
             return {"is_question": False, "reason": "AI service not available"}
         
-        try:
-            # まず支払い関連キーワードをチェック（除外対象）
-            payment_keywords = ["払", "お金", "円", "¥", "支払", "請求", "催促", "返", "貸", "借"]
-            if any(keyword in message_text for keyword in payment_keywords):
-                return {"is_question": False, "reason": "Payment request excluded"}
-            
-            # 質問の可能性があるキーワードをチェック
-            question_keywords = ["？", "?", "どう", "何", "いつ", "どこ", "誰", "なぜ", "どの", "教え", "わかる", "知ってる"]
-            if not any(keyword in message_text for keyword in question_keywords):
-                return {"is_question": False, "reason": "No question keywords found"}
-            
+        try:           
             # AIを使用した詳細判定
             prompt = f"""
-以下のメッセージが「質問」かどうかを判定してください。
+            以下のメッセージは、相手から最後に送られてきたメッセージです。
+            あなたは、このメッセージに対して、返信する必要があるかどうかを判定してください。
+            その際、そう判断した理由と以下の質問の種類を判定してください。
 
-メッセージ: "{message_text}"
+            メッセージ: "{message_text}"
 
-判定基準:
-- 疑問符（？、?）が含まれている
-- 疑問詞（何、どう、いつ、どこ、誰、なぜ、どの等）が含まれている
-- 情報を求める表現（教えて、わかる、知ってる等）が含まれている
-- 支払いや金銭に関する要求は質問として扱わない
+            質問の種類:
+            - 疑問符：（？、?）が含まれている
+            - 疑問詞：（何、どう、いつ、どこ、誰、なぜ、どの等）が含まれている
+            - 情報要求：その他、返信が必要な場合
+            - null：返信が不要な場合
+            
+            注意
+            支払いや金銭に関する要求は質問として扱わない（別途実装しているため）
 
-以下のJSON形式で回答してください:
-{{
-    "is_question": true/false,
-    "question_type": "疑問符" | "疑問詞" | "情報要求" | null,
-    "reason": "判定理由"
-}}
-"""
+            以下のJSON形式で回答してください:
+            {{
+                "is_question": true/false,
+                "question_type": "疑問符" | "疑問詞" | "情報要求" | null,
+                "reason": "判定理由"
+            }}
+            """
             
             response = await self.ai_service.quick_call(prompt)
             
