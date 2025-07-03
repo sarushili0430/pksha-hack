@@ -53,6 +53,9 @@ from linebot.v3.messaging import (
     ReplyMessageRequest,
     PushMessageRequest,  # ★ADD: Push 用
     TextMessage,
+    TextMessageV2,  # ★ADD: Mention 用
+    MentionSubstitutionObject,  # ★ADD: Mention 用
+    UserMentionTarget,  # ★ADD: Mention 用
 )
 from linebot.v3.messaging.rest import ApiException
 
@@ -337,17 +340,71 @@ async def reminder_loop():
                         else:
                             print(f"★DEBUG: Could not get requester profile for {requester_line_user_id}")
                         
-                        # リマインドメッセージを作成（請求者名を含む）
-                        text = (
+                        # グループの他のメンバーを取得（請求者以外）
+                        mention_targets = []
+                        mention_text_parts = []
+                        try:
+                            # グループメンバーを取得
+                            group_members_result = supabase.table("group_members") \
+                                .select("user_id, users(line_user_id)") \
+                                .eq("group_id", row["group_id"]) \
+                                .neq("user_id", row["requester_user_id"]) \
+                                .execute()
+                            
+                            if group_members_result.data:
+                                for i, member in enumerate(group_members_result.data):
+                                    if member.get("users") and i < 6:  # 最大6名まで
+                                        member_line_user_id = member["users"]["line_user_id"]
+                                        member_profile = await line_user_profile_service.get_user_profile_with_cache(member_line_user_id)
+                                        
+                                        if member_profile and member_profile.get("display_name"):
+                                            # メンション対象を追加
+                                            mention_key = f"member{i}"
+                                            mention_targets.append(UserMentionTarget(
+                                                user_id=member_line_user_id
+                                            ))
+                                            mention_text_parts.append(f"{{{mention_key}}}")
+                                            print(f"★DEBUG: Added mention target {member_line_user_id}")
+                                        else:
+                                            print(f"★DEBUG: Could not get member profile for {member_line_user_id}")
+                                
+                                # 残りのメンバー数を計算
+                                total_members = len(group_members_result.data)
+                                displayed_members = len(mention_targets)
+                                remaining_count = total_members - displayed_members
+                                
+                                print(f"★DEBUG: Total members: {total_members}, Displayed: {displayed_members}, Remaining: {remaining_count}")
+                            else:
+                                print("★DEBUG: No other group members found")
+                        except Exception as e:
+                            print(f"★DEBUG: Error getting other group members: {e}")
+                        
+                        # メンション付きメッセージを作成
+                        base_text = (
                             f"💰 お金の催促リマインド\n"
                             f"{requester_name}さんへの {row['amount']}円の支払いはお済みですか？\n"
                             f"まだの方は忘れずにお支払いください。"
                         )
                         
+                        if mention_targets:
+                            # メンション部分を追加
+                            mention_text = " ".join(mention_text_parts)
+                            remaining_count = len(group_members_result.data) - len(mention_targets)
+                            if remaining_count > 0:
+                                text = f"{base_text}\n\n{mention_text} 他{remaining_count}名の皆さん、確認お願いします！"
+                            else:
+                                text = f"{base_text}\n\n{mention_text} さん、確認お願いします！"
+                        else:
+                            text = base_text
+                        
                         print(f"★DEBUG: Sending reminder message: {text}")
                         
-                        # push_serviceを使用してメッセージ送信
-                        success = await push_service.send_to_line_group(line_group_id, text)
+                        # メンション付きメッセージ送信
+                        if mention_targets:
+                            success = await push_service.send_to_line_group_with_mentions(line_group_id, text, mention_targets)
+                        else:
+                            # メンションがない場合は通常のメッセージ送信
+                            success = await push_service.send_to_line_group(line_group_id, text)
                         
                         if success:
                             # 送信成功時にreminded_atを更新（レコードは削除しない）
@@ -401,11 +458,12 @@ async def question_reminder_loop():
                 if response_found:
                     print(f"★DEBUG: Question {question['id']} has responses, skipping reminder")
                 else:
-                    # 未返答のターゲットを取得
+                    # 未返答かつ未リマインドのターゲットを取得
                     targets_result = supabase.table("question_targets") \
-                        .select("target_user_id, users(line_user_id)") \
+                        .select("id, target_user_id, users(line_user_id)") \
                         .eq("question_id", question['id']) \
                         .is_("responded_at", "null") \
+                        .is_("reminded_at", "null") \
                         .execute()
                     
                     if targets_result.data:
@@ -437,6 +495,7 @@ async def question_reminder_loop():
                         for target in targets_result.data:
                             if target.get("users"):
                                 target_line_user_id = target["users"]["line_user_id"]
+                                target_record_id = target["id"]
                                 
                                 # 返答提案を生成
                                 response_suggestion = await _generate_response_suggestion(
@@ -458,7 +517,12 @@ async def question_reminder_loop():
                                 success = await push_service.send_to_line_user(target_line_user_id, reminder_text)
                                 
                                 if success:
-                                    print(f"★DEBUG: Sent reminder to {target_line_user_id}")
+                                    # 個人ごとにリマインド送信完了をマーク
+                                    supabase.table("question_targets").update({
+                                        "reminded_at": datetime.now(timezone.utc).isoformat()
+                                    }).eq("id", target_record_id).execute()
+                                    
+                                    print(f"★DEBUG: Sent reminder to {target_line_user_id} and marked as reminded")
                                 else:
                                     print(f"★DEBUG: Failed to send reminder to {target_line_user_id}")
                     
@@ -481,12 +545,12 @@ async def question_reminder_loop():
                     
             except Exception as e:
                 print(f"★DEBUG: Question reminder processing failed for ID {question.get('id', 'unknown')}: {e}")
-                # エラーが発生した質問も解決済みとしてマーク（無限ループを防ぐ）
+                # エラーが発生した質問もリマインド済みとしてマーク（無限ループを防ぐ）
                 try:
                     supabase.table("questions").update({
-                        "resolved_at": datetime.now(timezone.utc).isoformat()
+                        "reminded_at": datetime.now(timezone.utc).isoformat()
                     }).eq("id", question['id']).execute()
-                    print(f"★DEBUG: Marked problematic question as resolved, ID: {question['id']}")
+                    print(f"★DEBUG: Marked problematic question as reminded, ID: {question['id']}")
                 except:
                     pass
         else:
