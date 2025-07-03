@@ -265,7 +265,9 @@ class QuestionService:
             List of group members with user info
         """
         try:
+            print(f"★DEBUG: Getting group members for group_id: {group_id}")
             result = self.supabase.table("group_members").select("user_id, users(id, line_user_id)").eq("group_id", group_id).execute()
+            print(f"★DEBUG: Group members query result: {len(result.data)} members found")
             
             members = []
             for row in result.data:
@@ -274,11 +276,17 @@ class QuestionService:
                         "id": row["users"]["id"],
                         "line_user_id": row["users"]["line_user_id"]
                     })
+                    print(f"★DEBUG: Added member: {row['users']['id']} ({row['users']['line_user_id']})")
+                else:
+                    print(f"★DEBUG: Skipped member row without user data: {row}")
             
+            print(f"★DEBUG: Total valid members: {len(members)}")
             return members
             
         except Exception as e:
-            print(f"Error getting group members: {e}")
+            print(f"★ERROR: Error getting group members: {e}")
+            import traceback
+            print(f"★ERROR: Traceback: {traceback.format_exc()}")
             return []
 
 
