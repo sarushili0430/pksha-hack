@@ -370,7 +370,7 @@ async def reminder_loop():
                     pass
         else:
             print("★DEBUG: No reminders due at this time")
-        await asyncio.sleep(60)
+        await asyncio.sleep(15)  # ハッカソン用: 15秒間隔でチェック
 
 # ★ADD: 質問リマインド送信ループ
 async def question_reminder_loop():
@@ -447,7 +447,7 @@ async def question_reminder_loop():
                                 # リマインドメッセージを作成
                                 reminder_text = (
                                     f"💬 返答リマインド\n\n"
-                                    f"{questioner_name}さんから{group_name}で質問が届いて8時間経過しています。\n\n"
+                                    f"{questioner_name}さんから{group_name}で質問が届いて30秒経過しています。\n\n"
                                     f"質問内容：\n{question['question_text']}\n\n"
                                     f"こんな感じで返信しましょうか？\n{response_suggestion}"
                                 )
@@ -492,7 +492,7 @@ async def question_reminder_loop():
         else:
             print("★DEBUG: No question reminders due at this time")
         
-        await asyncio.sleep(60)
+        await asyncio.sleep(15)  # ハッカソン用: 15秒間隔でチェック
 
 async def _generate_response_suggestion(question_text: str, questioner_name: str) -> str:
     """質問に対する返答提案を生成"""
@@ -636,7 +636,8 @@ async def process_message_async(event: MessageEvent):
                         questioner_user_id=user_id,
                         question_text=question_content,
                         target_user_ids=target_user_ids,
-                        message_id=message_id
+                        message_id=message_id,
+                        remind_seconds=30  # ハッカソン用: 30秒でリマインド
                     )
                     
                     if question_id:
