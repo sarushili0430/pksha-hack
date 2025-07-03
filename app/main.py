@@ -599,6 +599,48 @@ def on_message(event: MessageEvent):
 
 
 # =========================
+# データベースレベルでの重複メッセージ防止
+# =========================
+async def is_message_already_processed(message_id: str) -> bool:
+    """
+    データベースでメッセージが既に処理済みかチェック
+    
+    Args:
+        message_id: LINE message ID
+        
+    Returns:
+        True if already processed, False otherwise
+    """
+    try:
+        result = supabase.table("messages").select("id").eq("raw_payload->>message->>id", message_id).limit(1).execute()
+        return len(result.data) > 0
+    except Exception as e:
+        print(f"★ERROR: Failed to check message processing status: {e}")
+        return False
+
+async def mark_message_as_processed(message_id: str):
+    """
+    メッセージを処理済みとしてマーク（軽量なレコード）
+    
+    Args:
+        message_id: LINE message ID
+    """
+    try:
+        # 処理済みメッセージのマーカーを作成
+        marker_data = {
+            "user_id": None,
+            "group_id": None,
+            "message_type": "processed_marker",
+            "text_content": f"PROCESSED:{message_id}",
+            "raw_payload": {"message": {"id": message_id}, "marker": True},
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        supabase.table("messages").insert(marker_data).execute()
+        print(f"★DEBUG: Marked message {message_id} as processed")
+    except Exception as e:
+        print(f"★ERROR: Failed to mark message as processed: {e}")
+
+# =========================
 # 非同期メッセージ処理
 # =========================
 async def process_message_async(event: MessageEvent):
@@ -606,10 +648,29 @@ async def process_message_async(event: MessageEvent):
     if not isinstance(event.message, TextMessageContent):
         return
 
-    # ★ADD: 重複メッセージチェック
+    # ★FIX: データベースレベルでの重複チェック
     message_id = event.message.id
+    
+    # まずデータベースで重複チェック
+    if await is_message_already_processed(message_id):
+        print(f"★DEBUG: Message already processed in database, skipping: {message_id}")
+        return
+    
+    # 処理開始をマーク（他のインスタンスが同じメッセージを処理するのを防ぐ）
+    try:
+        await mark_message_as_processed(message_id)
+    except Exception as e:
+        # 重複挿入エラーの場合は既に他のインスタンスが処理中
+        if "duplicate" in str(e).lower() or "unique" in str(e).lower():
+            print(f"★DEBUG: Another instance is already processing message {message_id}, skipping")
+            return
+        else:
+            print(f"★ERROR: Failed to mark message as processed: {e}")
+            # エラーでも処理を続行（フォールバック）
+    
+    # ★KEEP: メモリ内重複チェック（追加の安全措置）
     if message_id in processed_message_ids:
-        print(f"★DEBUG: Duplicate message detected, skipping: {message_id}")
+        print(f"★DEBUG: Duplicate message detected in memory, skipping: {message_id}")
         return
     
     # メッセージIDを記録
