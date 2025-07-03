@@ -283,39 +283,75 @@ async def reminder_loop():
         due = supabase.table("money_requests") \
             .select("id, group_id, requester_user_id, amount, remind_at") \
             .lte("remind_at", now_iso) \
+            .order("remind_at") \
+            .limit(1) \
             .execute().data
         
         print(f"★DEBUG: Found {len(due)} due reminders")
         
-        for row in due:
+        # 1回のループで1つのリマインダーのみ処理
+        if due:
+            row = due[0]  # 最初の（最も古い）リマインダーを処理
             try:
+                print(f"★DEBUG: Processing reminder ID: {row['id']}")
+                
                 # LINE Group IDを個別に取得
                 group_result = supabase.table("groups").select("line_group_id").eq("id", row["group_id"]).execute()
                 if not group_result.data:
-                    print(f"Group not found: {row['group_id']}")
-                    continue
-                    
-                line_group_id = group_result.data[0]["line_group_id"]
-                
-                # リマインドメッセージを作成
-                text = (
-                    f"💰 お金の催促リマインド\n"
-                    f"請求者への {row['amount']}円の支払いはお済みですか？\n"
-                    f"まだの方は忘れずにお支払いください。"
-                )
-                
-                # push_serviceを使用してメッセージ送信
-                success = await push_service.send_to_line_group(line_group_id, text)
-                
-                if success:
-                    # 送信成功時のみ削除
+                    print(f"Group not found: {row['group_id']}, deleting invalid reminder")
+                    # 無効なリマインダーを削除
                     supabase.table("money_requests").delete().eq("id", row["id"]).execute()
-                    print(f"★ADD: Sent reminder for {row['id']}")
                 else:
-                    print(f"★ADD: Failed to send reminder for {row['id']}")
+                    line_group_id = group_result.data[0]["line_group_id"]
+                    
+                    # 請求者のLINE User IDを取得
+                    requester_result = supabase.table("users").select("line_user_id").eq("id", row["requester_user_id"]).execute()
+                    if not requester_result.data:
+                        print(f"Requester user not found: {row['requester_user_id']}, deleting invalid reminder")
+                        # 無効なリマインダーを削除
+                        supabase.table("money_requests").delete().eq("id", row["id"]).execute()
+                    else:
+                        requester_line_user_id = requester_result.data[0]["line_user_id"]
+                        
+                        # 請求者のプロフィール情報を取得
+                        requester_profile = await line_user_profile_service.get_user_profile_with_cache(requester_line_user_id)
+                        requester_name = "誰か"  # デフォルト名
+                        
+                        if requester_profile and requester_profile.get("display_name"):
+                            requester_name = requester_profile["display_name"]
+                            print(f"★DEBUG: Found requester profile: {requester_name}")
+                        else:
+                            print(f"★DEBUG: Could not get requester profile for {requester_line_user_id}")
+                        
+                        # リマインドメッセージを作成（請求者名を含む）
+                        text = (
+                            f"💰 お金の催促リマインド\n"
+                            f"{requester_name}さんへの {row['amount']}円の支払いはお済みですか？\n"
+                            f"まだの方は忘れずにお支払いください。"
+                        )
+                        
+                        print(f"★DEBUG: Sending reminder message: {text}")
+                        
+                        # push_serviceを使用してメッセージ送信
+                        success = await push_service.send_to_line_group(line_group_id, text)
+                        
+                        if success:
+                            # 送信成功時のみ削除
+                            supabase.table("money_requests").delete().eq("id", row["id"]).execute()
+                            print(f"★DEBUG: Sent and deleted reminder for ID: {row['id']}")
+                        else:
+                            print(f"★DEBUG: Failed to send reminder for ID: {row['id']}")
                     
             except Exception as e:
-                print(f"Reminder processing failed: {e}")
+                print(f"★DEBUG: Reminder processing failed for ID {row.get('id', 'unknown')}: {e}")
+                # エラーが発生したリマインダーも削除（無限ループを防ぐ）
+                try:
+                    supabase.table("money_requests").delete().eq("id", row["id"]).execute()
+                    print(f"★DEBUG: Deleted problematic reminder ID: {row['id']}")
+                except:
+                    pass
+        else:
+            print("★DEBUG: No reminders due at this time")
         await asyncio.sleep(60)
 
 @app.on_event("startup")
