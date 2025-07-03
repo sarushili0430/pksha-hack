@@ -1,199 +1,188 @@
-"""
-メッセージ履歴管理サービス
+import os
+import logging
+from typing import List, Optional
+from linebot.v3.messaging import Configuration, ApiClient, MessagingApi
+from linebot.v3.messaging.models import TextMessage, PushMessageRequest
+from linebot.v3.messaging.exceptions import OpenApiException
+from supabase import create_client, Client
+from .line_utils import line_utils
 
-Supabaseから過去メッセージを取得し、LLM用にフォーマットする機能を提供します。
-"""
-
-from typing import List, Dict, Optional
-from supabase import Client
-from datetime import datetime, timezone
-
+logger = logging.getLogger(__name__)
 
 class MessageService:
-    """
-    メッセージ履歴管理サービス
-    
-    Supabaseからグループの過去メッセージを取得し、
-    LLMプロンプト用にフォーマットします。
-    """
-    
-    def __init__(self, supabase_client: Client):
+    def __init__(self):
+        LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
+        
+        if not LINE_CHANNEL_ACCESS_TOKEN:
+            raise ValueError("LINE_CHANNEL_ACCESS_TOKEN must be set")
+        
+        configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
+        self.api_client = ApiClient(configuration)
+        self.messaging_api = MessagingApi(self.api_client)
+        
+        # Supabaseクライアントの初期化
+        supabase_url = os.getenv("SUPABASE_URL")
+        supabase_key = os.getenv("SUPABASE_ANON_KEY")
+        
+        if not supabase_url or not supabase_key:
+            raise ValueError("SUPABASE_URL and SUPABASE_ANON_KEY must be set")
+        
+        self.supabase: Client = create_client(supabase_url, supabase_key)
+
+    async def send_message_to_user(self, user_id: str, message: str) -> bool:
         """
-        MessageServiceを初期化
+        個人ユーザーにメッセージを送信
         
         Args:
-            supabase_client: Supabaseクライアント
-        """
-        self.supabase = supabase_client
-    
-    async def get_group_message_history(
-        self, 
-        group_id: str, 
-        limit: Optional[int] = None,
-        exclude_current_message: bool = False
-    ) -> List[Dict]:
-        """
-        グループの過去メッセージを取得
-        
-        Args:
-            group_id: グループのUUID
-            limit: 取得する最大件数（Noneなら全件）
-            exclude_current_message: 最新メッセージを除外するか
+            user_id: 送信先のLINE User ID
+            message: 送信するメッセージテキスト
             
         Returns:
-            メッセージリスト（古い順）
+            bool: 送信成功の場合True、失敗の場合False
         """
         try:
-            query = (
-                self.supabase
-                    .table("messages")
-                    .select("text_content, message_type, created_at")
-                    .eq("group_id", group_id)
-                    .order("created_at")
-            )
+            text_message = TextMessage(text=message)
+            push_request = PushMessageRequest(to=user_id, messages=[text_message])
             
-            # 件数制限がある場合
-            if limit:
-                query = query.limit(limit)
+            self.messaging_api.push_message(push_request)
+            logger.info(f"Message sent successfully to user {user_id}")
+            return True
             
-            result = query.execute()
-            messages = result.data
+        except OpenApiException as e:
+            logger.error(f"LINE API error when sending message to user {user_id}: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Error sending message to user {user_id}: {e}")
+            return False
+
+    async def send_message_to_group(self, group_id: str, message: str) -> bool:
+        """
+        グループにメッセージを送信
+        
+        Args:
+            group_id: 送信先のLINE Group ID
+            message: 送信するメッセージテキスト
             
-            # テキストメッセージのみフィルタ
-            text_messages = [
-                msg for msg in messages 
-                if msg.get("message_type") == "text" and msg.get("text_content")
-            ]
+        Returns:
+            bool: 送信成功の場合True、失敗の場合False
+        """
+        try:
+            text_message = TextMessage(text=message)
+            push_request = PushMessageRequest(to=group_id, messages=[text_message])
             
-            # 最新メッセージを除外する場合
-            if exclude_current_message and text_messages:
-                text_messages = text_messages[:-1]
+            self.messaging_api.push_message(push_request)
+            logger.info(f"Message sent successfully to group {group_id}")
+            return True
             
-            print(f"Retrieved {len(text_messages)} historical messages for group {group_id}")
-            return text_messages
+        except OpenApiException as e:
+            logger.error(f"LINE API error when sending message to group {group_id}: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Error sending message to group {group_id}: {e}")
+            return False
+
+    async def send_message_to_user_by_internal_id(self, internal_user_id: str, message: str) -> bool:
+        """
+        内部ユーザーID（データベースのID）を使用してユーザーにメッセージを送信
+        
+        Args:
+            internal_user_id: データベースのuser_id
+            message: 送信するメッセージテキスト
+            
+        Returns:
+            bool: 送信成功の場合True、失敗の場合False
+        """
+        try:
+            # データベースからLINE User IDを取得
+            result = self.supabase.table("users").select("line_user_id").eq("id", internal_user_id).execute()
+            
+            if not result.data:
+                logger.warning(f"User not found in database: {internal_user_id}")
+                return False
+            
+            line_user_id = result.data[0]["line_user_id"]
+            return await self.send_message_to_user(line_user_id, message)
             
         except Exception as e:
-            print(f"Failed to fetch message history for group {group_id}: {e}")
+            logger.error(f"Error sending message to user by internal ID {internal_user_id}: {e}")
+            return False
+
+    async def send_message_to_group_by_internal_id(self, internal_group_id: str, message: str) -> bool:
+        """
+        内部グループID（データベースのID）を使用してグループにメッセージを送信
+        
+        Args:
+            internal_group_id: データベースのgroup_id
+            message: 送信するメッセージテキスト
+            
+        Returns:
+            bool: 送信成功の場合True、失敗の場合False
+        """
+        try:
+            # データベースからLINE Group IDを取得
+            result = self.supabase.table("groups").select("line_group_id").eq("id", internal_group_id).execute()
+            
+            if not result.data:
+                logger.warning(f"Group not found in database: {internal_group_id}")
+                return False
+            
+            line_group_id = result.data[0]["line_group_id"]
+            return await self.send_message_to_group(line_group_id, message)
+            
+        except Exception as e:
+            logger.error(f"Error sending message to group by internal ID {internal_group_id}: {e}")
+            return False
+
+    async def send_messages_to_multiple_users(self, user_ids: List[str], message: str) -> List[bool]:
+        """
+        複数のユーザーにメッセージを送信
+        
+        Args:
+            user_ids: 送信先のLINE User IDリスト
+            message: 送信するメッセージテキスト
+            
+        Returns:
+            List[bool]: 各ユーザーへの送信結果のリスト
+        """
+        results = []
+        for user_id in user_ids:
+            result = await self.send_message_to_user(user_id, message)
+            results.append(result)
+        
+        successful_sends = sum(results)
+        logger.info(f"Sent message to {successful_sends}/{len(user_ids)} users")
+        return results
+
+    async def send_message_to_group_members(self, group_id: str, message: str, exclude_user_ids: Optional[List[str]] = None) -> List[bool]:
+        """
+        グループメンバー全員に個別メッセージを送信
+        
+        Args:
+            group_id: 対象のLINE Group ID
+            message: 送信するメッセージテキスト
+            exclude_user_ids: 除外するユーザーIDのリスト（オプション）
+            
+        Returns:
+            List[bool]: 各メンバーへの送信結果のリスト
+        """
+        try:
+            # グループメンバーを取得
+            member_ids = await line_utils.get_group_members(group_id)
+            
+            if not member_ids:
+                logger.warning(f"No members found for group {group_id}")
+                return []
+            
+            # 除外するユーザーIDがある場合はフィルタリング
+            if exclude_user_ids:
+                member_ids = [user_id for user_id in member_ids if user_id not in exclude_user_ids]
+            
+            # 全メンバーにメッセージを送信
+            return await self.send_messages_to_multiple_users(member_ids, message)
+            
+        except Exception as e:
+            logger.error(f"Error sending message to group members {group_id}: {e}")
             return []
-    
-    def format_history_for_llm(self, messages: List[Dict]) -> str:
-        """
-        メッセージリストをLLMプロンプト用にフォーマット
-        
-        Args:
-            messages: メッセージリスト
-            
-        Returns:
-            フォーマット済み履歴文字列
-        """
-        if not messages:
-            return "（過去の会話履歴はありません）"
-        
-        formatted_lines = []
-        for msg in messages:
-            text_content = msg.get("text_content", "").strip()
-            if text_content:
-                # 簡潔なフォーマット（発言者情報は省略）
-                formatted_lines.append(f"- {text_content}")
-        
-        if not formatted_lines:
-            return "（過去の会話履歴はありません）"
-        
-        return "\n".join(formatted_lines)
-    
-    async def get_recent_messages_for_llm(
-        self, 
-        group_id: str, 
-        max_messages: int = 20
-    ) -> str:
-        """
-        LLM用に最近のメッセージ履歴を取得・フォーマット
-        
-        Args:
-            group_id: グループのUUID
-            max_messages: 最大取得件数（トークン制限対策）
-            
-        Returns:
-            LLMプロンプト用の履歴文字列
-        """
-        try:
-            # 最近のメッセージを取得（降順で取得して件数制限後、昇順に戻す）
-            result = (
-                self.supabase
-                    .table("messages")
-                    .select("text_content, message_type, created_at")
-                    .eq("group_id", group_id)
-                    .order("created_at", desc=True)
-                    .limit(max_messages)
-                    .execute()
-            )
-            
-            recent_messages = result.data
-            
-            # 古い順に戻す
-            recent_messages.reverse()
-            
-            # テキストメッセージのみフィルタ
-            text_messages = [
-                msg for msg in recent_messages 
-                if msg.get("message_type") == "text" and msg.get("text_content")
-            ]
-            
-            return self.format_history_for_llm(text_messages)
-            
-        except Exception as e:
-            print(f"Failed to get recent messages for LLM: {e}")
-            return "（メッセージ履歴の取得に失敗しました）"
-    
-    async def save_message(
-        self, 
-        user_id: str, 
-        group_id: Optional[str], 
-        message_type: str, 
-        text_content: str, 
-        raw_payload: dict
-    ):
-        """
-        メッセージをSupabaseに保存
-        
-        Args:
-            user_id: 送信者のユーザーID
-            group_id: グループID（1対1の場合はNone）
-            message_type: メッセージタイプ
-            text_content: テキスト内容
-            raw_payload: LINEからの生データ
-        """
-        try:
-            message_data = {
-                "user_id": user_id,
-                "group_id": group_id,
-                "message_type": message_type,
-                "text_content": text_content,
-                "raw_payload": raw_payload,
-                "created_at": datetime.now(timezone.utc).isoformat()
-            }
-            self.supabase.table("messages").insert(message_data).execute()
-            print(f"Message saved: {message_type} in group {group_id}")
-            
-        except Exception as e:
-            print(f"Error saving message: {e}")
-            raise
 
-
-# シングルトンインスタンス（main.pyで使用）
-_message_service: Optional[MessageService] = None
-
-def get_message_service(supabase_client: Client) -> MessageService:
-    """
-    MessageServiceのシングルトンインスタンスを取得
-    
-    Args:
-        supabase_client: Supabaseクライアント
-        
-    Returns:
-        MessageServiceインスタンス
-    """
-    global _message_service
-    if _message_service is None:
-        _message_service = MessageService(supabase_client)
-    return _message_service
+# シングルトンインスタンス
+message_service = MessageService()
