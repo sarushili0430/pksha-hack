@@ -45,6 +45,9 @@ class ReminderService:
                 .is_("reminded_at", "null") \
                 .execute()
             
+            # 質問リマインダーも毎分実行
+            await self.process_question_reminders()
+            
             if not due_requests.data:
                 return
             
@@ -104,6 +107,21 @@ class ReminderService:
             
         except Exception as e:
             logger.error(f"Error sending payment reminder: {e}")
+    
+    async def process_question_reminders(self):
+        """質問リマインダーを処理"""
+        try:
+            # 質問リマインダーサービスを動的インポート（循環インポート回避）
+            from app.question_reminder_service import question_reminder_service
+            
+            # デモ用: 2分非アクティブなユーザーに質問リマインダーを送信（5分間隔で再送）
+            result = await question_reminder_service.process_all_inactive_users(hours_threshold=2/60, reminder_interval_hours=5/60)
+            
+            if result.get("reminders_sent", 0) > 0:
+                logger.info(f"Question reminders sent: {result}")
+            
+        except Exception as e:
+            logger.error(f"Error processing question reminders: {e}")
 
 # シングルトンインスタンス
 reminder_service = ReminderService()
