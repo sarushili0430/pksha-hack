@@ -59,6 +59,7 @@ from linebot.v3.messaging.rest import ApiException
 # ------ 分離されたサービス ------
 from app.ai_service import get_ai_service
 from app.message_service import get_message_service
+from app.push_service import get_push_service
 
 # =========================
 # 0. 環境変数
@@ -93,6 +94,11 @@ handler = WebhookHandler(SECRET)
 ai_service = get_ai_service(OPENAI)
 
 # =========================
+# PushService 初期化
+# =========================
+push_service = get_push_service(TOKEN, supabase)
+
+# =========================
 # FastAPI アプリ
 # =========================
 app = FastAPI()
@@ -100,6 +106,46 @@ app = FastAPI()
 @app.get("/")
 async def health():
     return {"status": "ok"}
+
+# =========================
+# プッシュメッセージ送信API
+# =========================
+@app.post("/api/push-message")
+async def send_push_message(request: dict):
+    """
+    プッシュメッセージ送信API
+    
+    Body:
+        {
+            "type": "user" | "group" | "line_user" | "line_group",
+            "id": "送信先ID",
+            "message": "送信するメッセージ"
+        }
+    """
+    try:
+        message_type = request.get("type")
+        target_id = request.get("id")
+        message = request.get("message")
+        
+        if not all([message_type, target_id, message]):
+            return {"success": False, "error": "Missing required fields"}
+        
+        success = False
+        if message_type == "user":
+            success = await push_service.send_to_user(target_id, message)
+        elif message_type == "group":
+            success = await push_service.send_to_group(target_id, message)
+        elif message_type == "line_user":
+            success = await push_service.send_to_line_user(target_id, message)
+        elif message_type == "line_group":
+            success = await push_service.send_to_line_group(target_id, message)
+        else:
+            return {"success": False, "error": "Invalid message type"}
+        
+        return {"success": success}
+        
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 # ★DEL: /api/sync-group-members と関連メンバー同期ロジックをすべて削除
