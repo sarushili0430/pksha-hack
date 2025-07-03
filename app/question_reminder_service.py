@@ -6,7 +6,7 @@ Question Reminder Service
 
 import logging
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional
 from app.database_service import database_service
 from app.message_service import message_service
@@ -44,7 +44,7 @@ class QuestionReminderService:
         """
         try:
             # 指定時間前の時刻を計算
-            cutoff_time = datetime.now() - timedelta(hours=hours_threshold)
+            cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours_threshold)
             
             # 未回答の質問を取得
             questions_result = database_service.supabase.table("questions").select(
@@ -110,7 +110,7 @@ class QuestionReminderService:
                 return []
             
             inactive_members = []
-            reminder_cutoff_time = datetime.now() - timedelta(hours=reminder_interval_hours)
+            reminder_cutoff_time = datetime.now(timezone.utc) - timedelta(hours=reminder_interval_hours)
             
             for member in members_result.data:
                 user_data = member['users']
@@ -182,7 +182,13 @@ class QuestionReminderService:
                 return True
             
             # 最後のリマインダー送信時刻がカットオフ時刻より前の場合は送信
-            last_reminded_datetime = datetime.fromisoformat(last_reminded_at.replace('Z', '+00:00'))
+            # タイムゾーン情報を適切に処理
+            if last_reminded_at.endswith('Z'):
+                last_reminded_at = last_reminded_at.replace('Z', '+00:00')
+            elif '+' not in last_reminded_at and 'T' in last_reminded_at:
+                last_reminded_at = last_reminded_at + '+00:00'
+            
+            last_reminded_datetime = datetime.fromisoformat(last_reminded_at)
             return last_reminded_datetime < reminder_cutoff_time
             
         except Exception as e:
@@ -297,14 +303,14 @@ class QuestionReminderService:
             if existing_target.data:
                 # 既存レコードのreminded_atを更新
                 database_service.supabase.table("question_targets").update({
-                    "reminded_at": datetime.now().isoformat()
+                    "reminded_at": datetime.now(timezone.utc).isoformat()
                 }).eq("id", existing_target.data[0]['id']).execute()
             else:
                 # 新規レコードを作成
                 database_service.supabase.table("question_targets").insert({
                     "question_id": inactive_user_info['question_id'],
                     "target_user_id": user_uuid,
-                    "reminded_at": datetime.now().isoformat()
+                    "reminded_at": datetime.now(timezone.utc).isoformat()
                 }).execute()
                 
         except Exception as e:
