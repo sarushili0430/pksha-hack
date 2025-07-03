@@ -441,7 +441,8 @@ async def question_reminder_loop():
                                 # 返答提案を生成
                                 response_suggestion = await _generate_response_suggestion(
                                     question['question_text'], 
-                                    questioner_name
+                                    questioner_name,
+                                    question['group_id']
                                 )
                                 
                                 # リマインドメッセージを作成
@@ -494,11 +495,14 @@ async def question_reminder_loop():
         
         await asyncio.sleep(60)  # ハッカソン用: 15秒間隔でチェック
 
-async def _generate_response_suggestion(question_text: str, questioner_name: str) -> str:
-    """質問に対する返答提案を生成"""
+async def _generate_response_suggestion(question_text: str, questioner_name: str, group_id: str) -> str:
+    """質問に対する返答提案を生成（会話履歴付き）"""
     try:
+        # 会話履歴を取得
+        history = await message_service.get_recent_messages_for_llm(group_id, max_messages=50)
+        
         prompt = f"""
-以下の質問に対して、自然で適切な返答例を1つ提案してください。
+以下の質問に対して、会話の文脈を考慮した自然で適切な返答例を1つ提案してください。
 返答は簡潔で、実際に使いやすいものにしてください。
 
 質問者: {questioner_name}さん
@@ -506,7 +510,8 @@ async def _generate_response_suggestion(question_text: str, questioner_name: str
 
 返答例:"""
         
-        response = await ai_service.quick_call(prompt)
+        # 履歴付きでLLMに投げる
+        response = await ai_service.generate_response_async(prompt, history)
         return response.strip()
     except Exception as e:
         print(f"Failed to generate response suggestion: {e}")
