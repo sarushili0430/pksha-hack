@@ -30,7 +30,7 @@ class QuestionService:
         """
         self.supabase = supabase_client
         self.ai_service = ai_service
-        self.default_remind_seconds = 30  # ハッカソン用: 30秒でリマインド
+        self.default_remind_hours = 8  # Default reminder time in hours
     
     async def detect_question_and_targets(
         self, 
@@ -124,7 +124,7 @@ class QuestionService:
         question_text: str,
         target_user_ids: List[str],
         message_id: str,
-        remind_seconds: Optional[int] = None
+        remind_hours: Optional[int] = None
     ) -> Optional[str]:
         """
         Create question record in database
@@ -135,7 +135,7 @@ class QuestionService:
             question_text: The question text
             target_user_ids: List of user IDs who should respond
             message_id: LINE message ID for reference
-            remind_seconds: Seconds to wait before reminder (default: 30)
+            remind_hours: Hours to wait before reminder (default: 8)
             
         Returns:
             Question ID if created successfully, None otherwise
@@ -148,7 +148,7 @@ class QuestionService:
                 print("No valid targets for question (all targets were the questioner)")
                 return None
             
-            remind_at = datetime.now(timezone.utc) + timedelta(seconds=remind_seconds or self.default_remind_seconds)
+            remind_at = datetime.now(timezone.utc) + timedelta(hours=remind_hours or self.default_remind_hours)
             
             # Create question record
             question_data = {
