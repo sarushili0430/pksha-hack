@@ -612,7 +612,7 @@ async def is_message_already_processed(message_id: str) -> bool:
         True if already processed, False otherwise
     """
     try:
-        result = supabase.table("messages").select("id").eq("raw_payload->>message->>id", message_id).limit(1).execute()
+        result = supabase.table("processed_messages").select("id").eq("message_id", str(message_id)).limit(1).execute()
         return len(result.data) > 0
     except Exception as e:
         print(f"★ERROR: Failed to check message processing status: {e}")
@@ -620,22 +620,18 @@ async def is_message_already_processed(message_id: str) -> bool:
 
 async def mark_message_as_processed(message_id: str):
     """
-    メッセージを処理済みとしてマーク（軽量なレコード）
+    メッセージを処理済みとしてマーク（専用テーブルに記録）
     
     Args:
         message_id: LINE message ID
     """
     try:
-        # 処理済みメッセージのマーカーを作成
-        marker_data = {
-            "user_id": None,
-            "group_id": None,
-            "message_type": "processed_marker",
-            "text_content": f"PROCESSED:{message_id}",
-            "raw_payload": {"message": {"id": message_id}, "marker": True},
-            "created_at": datetime.now(timezone.utc).isoformat()
+        # 処理済みメッセージを専用テーブルに記録
+        processed_data = {
+            "message_id": message_id,
+            "processed_at": datetime.now(timezone.utc).isoformat()
         }
-        supabase.table("messages").insert(marker_data).execute()
+        supabase.table("processed_messages").insert(processed_data).execute()
         print(f"★DEBUG: Marked message {message_id} as processed")
     except Exception as e:
         print(f"★ERROR: Failed to mark message as processed: {e}")
