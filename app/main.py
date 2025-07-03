@@ -36,7 +36,7 @@ Supabaseデータベースにユーザー・グループ・メッセージ情報
 import os
 import asyncio
 import json  # ★ADD: JSON パース用
-from typing import Optional
+from typing import Optional, Set
 from datetime import datetime, timezone, timedelta  # ★ADD: timedelta
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, HTTPException
@@ -108,6 +108,9 @@ line_user_profile_service = get_line_user_profile_service(TOKEN, supabase)
 # FastAPI アプリ
 # =========================
 app = FastAPI()
+
+# ★ADD: 重複メッセージ処理防止用のセット
+processed_message_ids: Set[str] = set()
 
 @app.get("/")
 async def health():
@@ -384,10 +387,31 @@ async def process_message_async(event: MessageEvent):
     if not isinstance(event.message, TextMessageContent):
         return
 
+    # ★ADD: 重複メッセージチェック
+    message_id = event.message.id
+    if message_id in processed_message_ids:
+        print(f"★DEBUG: Duplicate message detected, skipping: {message_id}")
+        return
+    
+    # メッセージIDを記録
+    processed_message_ids.add(message_id)
+    
+    # セットサイズを制限（メモリリーク防止）
+    if len(processed_message_ids) > 1000:
+        # 古いIDを半分削除
+        old_ids = list(processed_message_ids)[:500]
+        for old_id in old_ids:
+            processed_message_ids.discard(old_id)
+        print(f"★DEBUG: Cleaned up processed_message_ids, current size: {len(processed_message_ids)}")
+
     user_text = event.message.text
     line_user_id  = event.source.user_id
     line_group_id = getattr(event.source, "group_id", None)
     reply_token   = event.reply_token
+    
+    print(f"★DEBUG: Processing message ID {message_id} from user {line_user_id} in group {line_group_id}")
+    print(f"★DEBUG: Message: {user_text}")
+    print(f"★DEBUG: Reply token: {reply_token}")
 
     # ユーザー＆グループ取得
     user_id  = await get_or_create_user(line_user_id)
