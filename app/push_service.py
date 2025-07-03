@@ -267,7 +267,7 @@ class PushService:
                 for i, target in enumerate(mention_targets):
                     substitution_objects.append(
                         MentionSubstitutionObject(
-                            key=f"member{i}",
+                            key=f"{{member{i}}}",
                             target=target
                         )
                     )
