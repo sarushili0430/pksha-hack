@@ -637,7 +637,14 @@ async def process_message_async(event: MessageEvent):
     if line_group_id:
         group_id = await get_or_create_group(line_group_id)
         # ★ADD: グループメンバーの自動追加と同期フラグ管理
-        await group_sync_service.add_user_and_mark_sync_if_needed(user_id, group_id)
+        print(f"★DEBUG: About to call GroupSync for user {user_id} in group {group_id}")
+        try:
+            result = await group_sync_service.add_user_and_mark_sync_if_needed(user_id, group_id)
+            print(f"★DEBUG: GroupSync result: {result}")
+        except Exception as e:
+            print(f"★ERROR: GroupSync failed: {e}")
+            import traceback
+            print(f"★ERROR: GroupSync traceback: {traceback.format_exc()}")
 
     # 会話履歴取得
     history = ""
