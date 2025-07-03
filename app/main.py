@@ -278,10 +278,15 @@ async def create_money_request(
 async def reminder_loop():
     while True:
         now_iso = datetime.now(timezone.utc).isoformat()
+        print(f"★DEBUG: Checking money_requests at {now_iso}")
+        
         due = supabase.table("money_requests") \
             .select("id, group_id, requester_user_id, amount, remind_at") \
             .lte("remind_at", now_iso) \
             .execute().data
+        
+        print(f"★DEBUG: Found {len(due)} due reminders")
+        
         for row in due:
             try:
                 # LINE Group IDを個別に取得
