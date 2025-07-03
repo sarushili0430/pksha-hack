@@ -492,7 +492,7 @@ async def question_reminder_loop():
         else:
             print("★DEBUG: No question reminders due at this time")
         
-        await asyncio.sleep(15)  # ハッカソン用: 15秒間隔でチェック
+        await asyncio.sleep(60)  # ハッカソン用: 15秒間隔でチェック
 
 async def _generate_response_suggestion(question_text: str, questioner_name: str) -> str:
     """質問に対する返答提案を生成"""
