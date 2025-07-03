@@ -45,7 +45,7 @@ from supabase import create_client, Client
 # ------ LINE v3 SDK ------
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
-from linebot.v3.webhooks import MessageEvent, TextMessageContent
+from linebot.v3.webhooks import MessageEvent, TextMessageContent, MemberJoinedEvent, MemberLeftEvent
 from linebot.v3.messaging import (
     Configuration,
     ApiClient,
@@ -62,6 +62,7 @@ from app.message_service import get_message_service
 from app.push_service import get_push_service
 from app.line_user_profile_service import get_line_user_profile_service
 from app.question_service import get_question_service
+from app.group_sync_service import GroupSyncService
 
 # =========================
 # 0. 環境変数
@@ -109,6 +110,11 @@ line_user_profile_service = get_line_user_profile_service(TOKEN, supabase)
 # Question Service 初期化
 # =========================
 question_service = get_question_service(supabase, ai_service)
+
+# =========================
+# Group Sync Service 初期化
+# =========================
+group_sync_service = GroupSyncService(TOKEN, supabase)
 
 # =========================
 # FastAPI アプリ
@@ -219,7 +225,139 @@ async def get_line_user_profile(line_user_id: str, force_refresh: bool = False):
         }
 
 
-# ★DEL: /api/sync-group-members と関連メンバー同期ロジックをすべて削除
+# =========================
+# Group Member Sync API
+# =========================
+@app.post("/api/sync-group-members")
+async def sync_group_members(request: dict):
+    """
+    グループメンバー同期API
+    
+    Body:
+        {
+            "line_group_id": "グループID",
+            "sync_all": false  # Optional: true の場合、すべてのグループを同期
+        }
+    """
+    try:
+        sync_all = request.get("sync_all", False)
+        
+        if sync_all:
+            # すべてのグループを同期
+            result = await group_sync_service.sync_all_groups()
+            return {
+                "success": True,
+                "message": "All groups synchronized",
+                "data": result
+            }
+        else:
+            # 特定のグループを同期
+            line_group_id = request.get("line_group_id")
+            if not line_group_id:
+                return {
+                    "success": False,
+                    "error": "line_group_id is required when sync_all is false"
+                }
+            
+            result = await group_sync_service.sync_group_members(line_group_id)
+            return {
+                "success": result.get("success", False),
+                "message": "Group members synchronized" if result.get("success") else "Sync failed",
+                "data": result
+            }
+            
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+@app.get("/api/group-members/{line_group_id}")
+async def get_group_members(line_group_id: str):
+    """
+    グループメンバー情報取得API
+    
+    Args:
+        line_group_id: LINEグループID
+        
+    Returns:
+        {
+            "success": True/False,
+            "data": {
+                "group_id": "internal_group_id",
+                "line_group_id": "line_group_id",
+                "member_count": 5,
+                "members": [
+                    {
+                        "line_user_id": "U...",
+                        "display_name": "名前",
+                        "picture_url": "...",
+                        "joined_at": "2023-...",
+                        "last_active_at": "2023-..."
+                    }
+                ]
+            }
+        }
+    """
+    try:
+        result = await group_sync_service.get_group_members_info(line_group_id)
+        
+        if "error" in result:
+            return {
+                "success": False,
+                "error": result["error"]
+            }
+        
+        return {
+            "success": True,
+            "data": result
+        }
+        
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+@app.get("/api/group-member-count/{line_group_id}")
+async def get_group_member_count(line_group_id: str):
+    """
+    グループメンバー数取得API
+    
+    Args:
+        line_group_id: LINEグループID
+        
+    Returns:
+        {
+            "success": True/False,
+            "data": {
+                "line_group_id": "line_group_id",
+                "member_count": 5
+            }
+        }
+    """
+    try:
+        count = await group_sync_service.get_group_member_count(line_group_id)
+        
+        if count is None:
+            return {
+                "success": False,
+                "error": "Failed to get group member count"
+            }
+        
+        return {
+            "success": True,
+            "data": {
+                "line_group_id": line_group_id,
+                "member_count": count
+            }
+        }
+        
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
 
 
 # =========================
@@ -525,6 +663,17 @@ async def startup_event():
 def on_message(event: MessageEvent):
     asyncio.create_task(process_message_async(event))
 
+# =========================
+# グループメンバー参加イベントハンドラ
+# =========================
+@handler.add(MemberJoinedEvent)
+def on_member_joined(event: MemberJoinedEvent):
+    asyncio.create_task(process_member_joined_async(event))
+
+@handler.add(MemberLeftEvent)
+def on_member_left(event: MemberLeftEvent):
+    asyncio.create_task(process_member_left_async(event))
+
 
 # =========================
 # 非同期メッセージ処理
@@ -650,5 +799,70 @@ async def process_message_async(event: MessageEvent):
         except Exception as e:
             print(f"Question detection failed: {e}")
 
+    # ★ADD: メンバー活動追跡タスク
+    async def update_member_activity():
+        if group_id:
+            try:
+                # グループメンバーの最終活動時刻を更新
+                supabase.table("group_members").update({
+                    "last_active_at": datetime.now(timezone.utc).isoformat()
+                }).eq("group_id", group_id).eq("user_id", user_id).execute()
+                
+                print(f"★DEBUG: Updated last_active_at for user {user_id} in group {group_id}")
+            except Exception as e:
+                print(f"★DEBUG: Failed to update member activity: {e}")
+
     # 並列実行
-    await asyncio.gather(save_task, do_reply(), detect_money_request(), detect_question(), return_exceptions=True)
+    await asyncio.gather(save_task, do_reply(), detect_money_request(), detect_question(), update_member_activity(), return_exceptions=True)
+
+
+# =========================
+# グループメンバー参加/退出イベント処理
+# =========================
+async def process_member_joined_async(event: MemberJoinedEvent):
+    """
+    メンバーがグループに参加したときの処理
+    - グループメンバーの同期を実行
+    """
+    try:
+        line_group_id = getattr(event.source, "group_id", None)
+        if not line_group_id:
+            print("★DEBUG: Member joined event without group_id")
+            return
+        
+        print(f"★DEBUG: Member joined group {line_group_id}")
+        
+        # グループメンバーを同期
+        result = await group_sync_service.sync_group_members(line_group_id)
+        
+        if result.get("success"):
+            print(f"★DEBUG: Group sync successful after member join: {result.get('members_added', 0)} members added")
+        else:
+            print(f"★DEBUG: Group sync failed after member join: {result.get('error', 'Unknown error')}")
+            
+    except Exception as e:
+        print(f"★DEBUG: Error processing member joined event: {e}")
+
+async def process_member_left_async(event: MemberLeftEvent):
+    """
+    メンバーがグループから退出したときの処理
+    - グループメンバーの同期を実行
+    """
+    try:
+        line_group_id = getattr(event.source, "group_id", None)
+        if not line_group_id:
+            print("★DEBUG: Member left event without group_id")
+            return
+        
+        print(f"★DEBUG: Member left group {line_group_id}")
+        
+        # グループメンバーを同期
+        result = await group_sync_service.sync_group_members(line_group_id)
+        
+        if result.get("success"):
+            print(f"★DEBUG: Group sync successful after member left: {result.get('members_removed', 0)} members removed")
+        else:
+            print(f"★DEBUG: Group sync failed after member left: {result.get('error', 'Unknown error')}")
+            
+    except Exception as e:
+        print(f"★DEBUG: Error processing member left event: {e}")
