@@ -263,15 +263,25 @@ class QuestionReminderService:
             suggestions = data.get("suggestions") if isinstance(data, dict) else None
             if not suggestions or not isinstance(suggestions, list) or len(suggestions) < 4:
                 raise ValueError("Invalid suggestions")
+
+            # 生成した返信候補をログに出力（送信前に内容確認できるようにする）
+            logger.info(
+                f"[SUGGESTIONS] For question '{question_text[:40].replace('\n', ' ')}' → {suggestions[:4]}"
+            )
+
             return suggestions[:4]
         except Exception as e:
             logger.error(f"Error generating response suggestion: {e}")
-            return [
+            fallback = [
                 "了解！なるはやで返事します。",
                 "あとで詳しく確認するね。",
                 "ごめん、ちょっと今は難しいかも。",
                 "申し訳ない、今回は対応できないです。"
             ]
+            logger.info(
+                f"[SUGGESTIONS] (fallback) For question '{question_text[:40].replace('\n', ' ')}' → {fallback}"
+            )
+            return fallback
     
     async def send_individual_reminder(self, inactive_user_info: Dict) -> bool:
         """
