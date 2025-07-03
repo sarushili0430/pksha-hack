@@ -190,7 +190,7 @@ async def create_money_request(
     group_id: str,
     requester_id: str,
     amount: int,
-    delay_sec: int = 86400
+    delay_sec: int = 20
 ):
     remind_at = datetime.now(timezone.utc) + timedelta(seconds=delay_sec)
     # 重複ガード
