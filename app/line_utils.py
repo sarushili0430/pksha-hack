@@ -1,6 +1,6 @@
 import os
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Optional
 from linebot.v3.messaging import Configuration, ApiClient, MessagingApi
 from linebot.v3.messaging.models import GetGroupMembersCountResponse, GetGroupMemberUserIdsResponse
 from linebot.v3.exceptions import ApiException
@@ -128,6 +128,23 @@ class LineUtils:
         except Exception as e:
             logger.error(f"Error getting group member count: {e}")
             return None
+    
+    def is_group_chat_webhook(self, event_data: dict) -> bool:
+        """
+        受け取ったWebhookがGroup Chatのものかを判定する
+        
+        Args:
+            event_data: LINE Webhookイベントデータ
+            
+        Returns:
+            bool: Group ChatのWebhookの場合True、それ以外はFalse
+        """
+        source = event_data.get("source", {})
+        source_type = source.get("type")
+        group_id = source.get("groupId")
+        
+        # sourceのtypeが"group"かつgroupIdが存在する場合はグループチャット
+        return source_type == "group" and group_id is not None
 
 # シングルトンインスタンス
 line_utils = LineUtils()
