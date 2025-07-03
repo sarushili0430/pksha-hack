@@ -91,7 +91,7 @@ class ReminderService:
                 requester_name = requester_info.data[0]["display_name"] or "誰か"
             
             # リマインダーメッセージを作成
-            reminder_message = f"💰 支払いリマインダー\n\n{requester_name}さんからの{amount}円の支払いリクエストです。\n\n忘れずに支払いをお願いします！"
+            reminder_message = f"\n\n{requester_name}さんから{amount}円の支払いリクエストがあります。\n\n忘れずに支払いをお願いします！"
             
             # LINEメッセージを送信
             await message_service.send_message_to_group(line_group_id, reminder_message)

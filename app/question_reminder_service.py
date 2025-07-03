@@ -196,43 +196,72 @@ class QuestionReminderService:
             # エラーの場合はリマインダーを送信
             return True
     
-    async def generate_response_suggestion(self, question_text: str, group_name: str, questioner_name: str) -> str:
+    async def generate_response_suggestion(self, question_text: str, group_name: str, questioner_name: str) -> list[str]:
         """
-        AIを使用して回答候補を生成
-        
-        Args:
-            question_text: 質問文
-            group_name: グループ名
-            questioner_name: 質問者名
-            
-        Returns:
-            str: 回答候補
+        AI を使って LINE 用の自然な返信候補を 4 つ生成し、JSON で受け取る
+        戻り値は返信文のみのリスト（長さ 4）
         """
         if not self.ai_service:
-            return "申し訳ございません。回答候補の生成機能が利用できません。"
-        
-        try:
-            prompt = f"""
-以下の質問に対して、適切な回答候補を提案してください。
+            return [
+                "了解！なるはやで返事します。",
+                "あとで詳しく確認するね。",
+                "ごめん、ちょっと今は難しいかも。",
+                "申し訳ない、今回は対応できないです。"
+            ]
 
-グループ名: {group_name}
-質問者: {questioner_name}さん
-質問内容: "{question_text}"
+        prompt = f"""
+返す「精神的ハードルが高い」ラインってありますよね？あなたにはそういう人の代わりに返信を考えてあげて欲しいです。
+誘われたけど微妙に行きたくないケース、謝罪しないといけないケース、こっちは短い返答してるのに永遠に返事してくるケースなどを考えています笑
+そこで、以下の質問に対して、そのまま送れる返信文を、 4 つ提案してください。
+内容はあなたのセンスに任せますが、その人とのラインの文脈をしっかり考えて上で、
+ポジティブなものからネガティブなものまで含まれる形で提案してあげるといいでしょう。
 
-回答候補を以下の形式で3つ提案してください：
-1. 具体的で実用的な回答
-2. 質問者に詳細を確認する回答
-3. 他のメンバーに意見を求める回答
 
-各回答候補は簡潔で、グループチャットで使いやすい形式にしてください。
+質問情報:
+・質問: "{question_text}"
+
+制約:
+1. 出力は必ず JSONで、次の形式だけを含めてください（説明文やコードブロックは不要）。
+{{
+  "suggestions": ["返信1", "返信2", "返信3", "返信4"]
+}}
+2. 改行・ナンバリング・装飾（絵文字等）を含めない。
+
+例:
+質問: "え、月曜ってどうかな！みさきがよかったら！！"
+{{
+  "suggestions": ["うんそうだね、じゃあ行くよ！", "月曜ね、ちょっと考える！", "ごめん、月曜はもう予定入っちゃった、、", "来週は忙しいって言ったじゃん、、？"]
+}}
+
+質問："お疲れさま
+昨日の締め作業、冷蔵庫の中ちゃんと確認してなかったよね？
+賞味期限切れてる牛乳が、そのままだったけど、どういうこと？
+"
+{
+  "suggestions": [
+    "ご指摘ありがとうございます。確認不足で申し訳ありませんでした。次回からは徹底して確認します。",
+    "すみません、本当に見落としてしまいました…。今後はこうしたことがないよう気をつけます。",
+    "ごめんなさい、完全に油断していました…。次からは賞味期限などしっかり確認します。",
+    "申し訳ありません…。次回からは同じミスを繰り返さないよう注意しますので、お許しください。"
+  ]
+}
 """
-            
-            response = await self.ai_service.quick_call(prompt)
-            return response
-            
+
+        try:
+            raw = await self.ai_service.quick_call(prompt)
+            data = json.loads(raw)
+            suggestions = data.get("suggestions") if isinstance(data, dict) else None
+            if not suggestions or not isinstance(suggestions, list) or len(suggestions) < 4:
+                raise ValueError("Invalid suggestions")
+            return suggestions[:4]
         except Exception as e:
             logger.error(f"Error generating response suggestion: {e}")
-            return "申し訳ございません。回答候補の生成中にエラーが発生しました。"
+            return [
+                "了解！なるはやで返事します。",
+                "あとで詳しく確認するね。",
+                "ごめん、ちょっと今は難しいかも。",
+                "申し訳ない、今回は対応できないです。"
+            ]
     
     async def send_individual_reminder(self, inactive_user_info: Dict) -> bool:
         """
@@ -252,33 +281,35 @@ class QuestionReminderService:
                 inactive_user_info['questioner_name']
             )
             
-            # リマインダーメッセージを作成
-            reminder_message = f"""🔔 未回答の質問があります
+            # リマインド本文（回答候補を含めない）
+            reminder_message = f"""
+{inactive_user_info['questioner_name']}さんから「{inactive_user_info['question_text']}」というメッセージが届いています。
+返信例を作成したので、コピペで返信できます。
+"""
 
-グループ: {inactive_user_info['group_name']}
-質問者: {inactive_user_info['questioner_name']}さん
-
-質問: {inactive_user_info['question_text']}
-
-💡 回答候補:
-{response_suggestion}
-
-お時間のある時にグループで回答していただけますと幸いです。"""
-            
-            # 個別メッセージを送信
+            # まずリマインド本文を送信
             success = await message_service.send_message_to_user(
                 inactive_user_info['inactive_user_id'],
                 reminder_message
             )
-            
+
+            all_sent = success
             if success:
-                logger.info(f"Reminder sent to {inactive_user_info['inactive_user_name']} for question {inactive_user_info['question_id']}")
-                # 送信記録を保存
+                # 4 つの返信案を個別メッセージで送信
+                for suggestion in response_suggestion:
+                    sent = await message_service.send_message_to_user(
+                        inactive_user_info['inactive_user_id'],
+                        suggestion
+                    )
+                    all_sent = all_sent and sent
+
+            if all_sent:
+                logger.info(f"Reminder & suggestions sent to {inactive_user_info['inactive_user_name']} for question {inactive_user_info['question_id']}")
                 await self._record_reminder_sent(inactive_user_info)
             else:
-                logger.error(f"Failed to send reminder to {inactive_user_info['inactive_user_name']}")
-            
-            return success
+                logger.error(f"Failed to send one or more messages to {inactive_user_info['inactive_user_name']}")
+
+            return all_sent
             
         except Exception as e:
             logger.error(f"Error sending individual reminder: {e}")
