@@ -65,6 +65,7 @@ from app.message_service import get_message_service
 from app.push_service import get_push_service
 from app.line_user_profile_service import get_line_user_profile_service
 from app.question_service import get_question_service
+from app.group_sync_service import get_group_sync_service
 
 # =========================
 # 0. 環境変数
@@ -112,6 +113,11 @@ line_user_profile_service = get_line_user_profile_service(TOKEN, supabase)
 # Question Service 初期化
 # =========================
 question_service = get_question_service(supabase, ai_service)
+
+# =========================
+# Group Sync Service 初期化
+# =========================
+group_sync_service = get_group_sync_service(TOKEN, supabase)
 
 # =========================
 # FastAPI アプリ
@@ -257,6 +263,7 @@ async def get_or_create_group(line_group_id: str) -> str:
     group_data = {"line_group_id": line_group_id, "created_at": datetime.now(timezone.utc).isoformat()}
     inserted = supabase.table("groups").insert(group_data).execute()
     return inserted.data[0]["id"]
+
 
 
 # ★ADD: money_requests 登録用
@@ -629,6 +636,8 @@ async def process_message_async(event: MessageEvent):
     group_id = None
     if line_group_id:
         group_id = await get_or_create_group(line_group_id)
+        # ★ADD: グループメンバーの自動追加と同期フラグ管理
+        await group_sync_service.add_user_and_mark_sync_if_needed(user_id, group_id)
 
     # 会話履歴取得
     history = ""
@@ -684,14 +693,19 @@ async def process_message_async(event: MessageEvent):
     async def detect_question():
         # グループメッセージでない場合はスキップ
         if not group_id:
+            print(f"★DEBUG: Skipping question detection - not a group message")
             return
             
+        print(f"★DEBUG: Starting question detection for message: '{user_text}' in group: {group_id}")
+        
         try:
             # 質問検出
             result = await question_service.detect_question_and_targets(user_text, group_id)
+            print(f"★DEBUG: Question detection result: {result}")
             
             if result:
                 is_question, target_user_ids, question_content = result
+                print(f"★DEBUG: Is question: {is_question}, Targets: {len(target_user_ids) if target_user_ids else 0}, Content: {question_content}")
                 
                 if is_question and target_user_ids:
                     # 質問レコードを作成
@@ -708,9 +722,17 @@ async def process_message_async(event: MessageEvent):
                         print(f"★ADD: Question created with ID: {question_id}")
                     else:
                         print("★ADD: Failed to create question record")
+                elif is_question and not target_user_ids:
+                    print("★DEBUG: Question detected but no valid targets found")
+                else:
+                    print("★DEBUG: Not detected as a question")
+            else:
+                print("★DEBUG: Question detection returned None")
                         
         except Exception as e:
-            print(f"Question detection failed: {e}")
+            print(f"★ERROR: Question detection failed: {e}")
+            import traceback
+            print(f"★ERROR: Traceback: {traceback.format_exc()}")
 
     # 並列実行
     await asyncio.gather(save_task, do_reply(), detect_money_request(), detect_question(), return_exceptions=True)
