@@ -2,8 +2,8 @@ import os
 import logging
 from typing import List, Optional
 from linebot.v3.messaging import Configuration, ApiClient, MessagingApi
-from linebot.v3.messaging.models import GetGroupMembersCountResponse, GetGroupMemberUserIdsResponse
-from linebot.v3.exceptions import ApiException
+from linebot.v3.messaging.models import GroupMemberCountResponse, MembersIdsResponse
+from linebot.v3.messaging.exceptions import OpenApiException
 from supabase import create_client, Client
 
 logger = logging.getLogger(__name__)
@@ -33,13 +33,13 @@ class LineUtils:
         LINE APIからグループメンバーのユーザーIDリストを取得
         """
         try:
-            response: GetGroupMemberUserIdsResponse = self.messaging_api.get_group_member_user_ids(group_id)
+            response: MembersIdsResponse = self.messaging_api.get_group_member_user_ids(group_id)
             member_ids = response.member_ids
             
             logger.info(f"Retrieved {len(member_ids)} members from LINE API for group {group_id}")
             return member_ids
             
-        except ApiException as e:
+        except OpenApiException as e:
             logger.error(f"LINE API error when getting group members: {e}")
             return []
         except Exception as e:
@@ -116,13 +116,13 @@ class LineUtils:
         グループのメンバー数を取得
         """
         try:
-            response: GetGroupMembersCountResponse = self.messaging_api.get_group_members_count(group_id)
+            response: GroupMemberCountResponse = self.messaging_api.get_group_members_count(group_id)
             count = response.count
             
             logger.info(f"Group {group_id} has {count} members")
             return count
             
-        except ApiException as e:
+        except OpenApiException as e:
             logger.error(f"LINE API error when getting group member count: {e}")
             return None
         except Exception as e:

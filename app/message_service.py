@@ -3,7 +3,7 @@ import logging
 from typing import List, Optional
 from linebot.v3.messaging import Configuration, ApiClient, MessagingApi
 from linebot.v3.messaging.models import TextMessage, PushMessageRequest
-from linebot.v3.exceptions import ApiException
+from linebot.v3.messaging.exceptions import OpenApiException
 from supabase import create_client, Client
 from .line_utils import line_utils
 
@@ -48,7 +48,7 @@ class MessageService:
             logger.info(f"Message sent successfully to user {user_id}")
             return True
             
-        except ApiException as e:
+        except OpenApiException as e:
             logger.error(f"LINE API error when sending message to user {user_id}: {e}")
             return False
         except Exception as e:
@@ -74,7 +74,7 @@ class MessageService:
             logger.info(f"Message sent successfully to group {group_id}")
             return True
             
-        except ApiException as e:
+        except OpenApiException as e:
             logger.error(f"LINE API error when sending message to group {group_id}: {e}")
             return False
         except Exception as e:

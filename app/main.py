@@ -1,12 +1,15 @@
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
+from contextlib import asynccontextmanager
 from linebot.v3 import WebhookHandler
 from linebot.v3.messaging import Configuration
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 from linebot.v3.exceptions import InvalidSignatureError
 from app.webhook_service import webhook_service
+from app.reminder_service import reminder_service
 import os
 import logging
 import json
+import asyncio
 from dotenv import load_dotenv
 
 # Configure logging
@@ -14,7 +17,23 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="LINE Bot", version="1.0.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """アプリケーションのライフサイクル管理"""
+    # 起動時の処理
+    logger.info("Starting reminder service...")
+    reminder_task = asyncio.create_task(reminder_service.start_reminder_loop())
+    yield
+    # 終了時の処理
+    logger.info("Stopping reminder service...")
+    reminder_service.stop_reminder_loop()
+    reminder_task.cancel()
+    try:
+        await reminder_task
+    except asyncio.CancelledError:
+        pass
+
+app = FastAPI(title="LINE Bot", version="1.0.0", lifespan=lifespan)
 
 # LINE Bot configuration
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")

@@ -101,8 +101,8 @@ class MoneyCheckerService:
                 logger.error("Group ID not found in event data")
                 return
             
-            # 30秒後にリマインドを設定
-            remind_at = datetime.now() + timedelta(seconds=30)
+            # 60秒後にリマインドを設定
+            remind_at = datetime.now() + timedelta(seconds=60)
             
             # データベースに保存
             money_request_data = {
