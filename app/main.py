@@ -217,24 +217,38 @@ async def reminder_loop():
     while True:
         now_iso = datetime.now(timezone.utc).isoformat()
         due = supabase.table("money_requests") \
-            .select("*") \
+            .select("id, group_id, requester_user_id, amount, remind_at") \
             .lte("remind_at", now_iso) \
             .execute().data
         for row in due:
             try:
-                with ApiClient(cfg) as api_client:
-                    msg_api = MessagingApi(api_client)
-                    text = (
-                        f"@everyone {row['requester_user_id']} さんへの "
-                        f"{row['amount']}円返しましたか？"
-                    )
-                    push_req = PushMessageRequest(to=row["group_id"], messages=[TextMessage(text=text)])
-                    msg_api.push_message(push_req)
-                # 削除
-                supabase.table("money_requests").delete().eq("id", row["id"]).execute()
-                print(f"★ADD: Sent reminder for {row['id']}")
+                # LINE Group IDを個別に取得
+                group_result = supabase.table("groups").select("line_group_id").eq("id", row["group_id"]).execute()
+                if not group_result.data:
+                    print(f"Group not found: {row['group_id']}")
+                    continue
+                    
+                line_group_id = group_result.data[0]["line_group_id"]
+                
+                # リマインドメッセージを作成
+                text = (
+                    f"💰 お金の催促リマインド\n"
+                    f"請求者への {row['amount']}円の支払いはお済みですか？\n"
+                    f"まだの方は忘れずにお支払いください。"
+                )
+                
+                # push_serviceを使用してメッセージ送信
+                success = await push_service.send_to_line_group(line_group_id, text)
+                
+                if success:
+                    # 送信成功時のみ削除
+                    supabase.table("money_requests").delete().eq("id", row["id"]).execute()
+                    print(f"★ADD: Sent reminder for {row['id']}")
+                else:
+                    print(f"★ADD: Failed to send reminder for {row['id']}")
+                    
             except Exception as e:
-                print(f"Reminder push failed: {e}")
+                print(f"Reminder processing failed: {e}")
         await asyncio.sleep(60)
 
 @app.on_event("startup")
@@ -294,18 +308,28 @@ async def process_message_async(event: MessageEvent):
 
     # ★ADD: 請求判定タスク
     async def detect_money_request():
+        # グループメッセージでない場合はスキップ
+        if not group_id:
+            return
+            
         prompt = (
             "あなたは会計係です。\n"
             "この発言が誰かに具体的な金額を請求している場合のみ、"
             '{"yes": true, "amount": <金額>}をJSONで返してください。'
-            "それ以外は{'yes': false}を返してください。\n"
+            "それ以外は{\"yes\": false}を返してください。\n"
             f"### 発言\n{user_text}"
         )
         try:
             resp = await ai_service.generate_response_async(prompt, "")
-            data = json.loads(resp)
-            if data.get("yes"):
-                await create_money_request(group_id, user_id, int(data["amount"]))
+            # JSONパースを安全に実行
+            try:
+                data = json.loads(resp.strip())
+                if data.get("yes") and "amount" in data:
+                    amount = int(data["amount"])
+                    if amount > 0:
+                        await create_money_request(group_id, user_id, amount)
+            except (json.JSONDecodeError, ValueError, KeyError) as json_err:
+                print(f"JSON parsing failed: {json_err}, response: {resp}")
         except Exception as e:
             print(f"Money detection failed: {e}")
 
