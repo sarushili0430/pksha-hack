@@ -148,6 +148,25 @@ class LineUtils:
             logger.error(f"Error getting group member count: {e}")
             return None
     
+    async def get_group_summary(self, line_group_id: str) -> Optional[str]:
+        """LINE API からグループ名を取得して返す（アイコン URL は返さない）
+
+        Args:
+            line_group_id: LINE のグループ ID
+
+        Returns:
+            str | None: グループ名（取得できなければ None）
+        """
+        try:
+            summary = self.messaging_api.get_group_summary(line_group_id)
+            return getattr(summary, "group_name", None)
+        except OpenApiException as e:
+            logger.error(f"LINE API error when getting group summary for {line_group_id}: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Error getting group summary from LINE: {e}")
+            return None
+    
     def is_group_chat_webhook(self, event_data: dict) -> bool:
         """
         受け取ったWebhookがGroup Chatのものかを判定する
