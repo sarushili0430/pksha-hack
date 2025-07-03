@@ -148,21 +148,18 @@ class LineUtils:
             logger.error(f"Error getting group member count: {e}")
             return None
     
-    async def get_group_summary(self, line_group_id: str) -> Optional[dict]:
-        """LINE API からグループサマリー（名称・アイコン）を取得
+    async def get_group_summary(self, line_group_id: str) -> Optional[str]:
+        """LINE API からグループ名を取得して返す（アイコン URL は返さない）
 
         Args:
             line_group_id: LINE のグループ ID
 
         Returns:
-            dict | None: {"group_name": str, "picture_url": str} 取得できなければ None
+            str | None: グループ名（取得できなければ None）
         """
         try:
             summary = self.messaging_api.get_group_summary(line_group_id)
-            return {
-                "group_name": getattr(summary, "group_name", None),
-                "picture_url": getattr(summary, "picture_url", None)
-            }
+            return getattr(summary, "group_name", None)
         except OpenApiException as e:
             logger.error(f"LINE API error when getting group summary for {line_group_id}: {e}")
             return None

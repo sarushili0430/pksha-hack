@@ -84,8 +84,7 @@ class DatabaseService:
             if not result.data:
                 # 初めて見るグループ。LINE API から名前を取得
                 from .line_utils import line_utils  # 遅延 import で循環回避
-                summary = await line_utils.get_group_summary(line_group_id)
-                group_name = summary.get("group_name") if summary else None
+                group_name = await line_utils.get_group_summary(line_group_id)
 
                 group_data = {
                     "line_group_id": line_group_id,
@@ -101,8 +100,7 @@ class DatabaseService:
                 if not current_name:
                     # 既存だが名前が空 → 取得して更新
                     from .line_utils import line_utils
-                    summary = await line_utils.get_group_summary(line_group_id)
-                    new_name = summary.get("group_name") if summary else None
+                    new_name = await line_utils.get_group_summary(line_group_id)
                     if new_name:
                         self.supabase.table("groups").update({"group_name": new_name}).eq("id", group_uuid).execute()
                         logger.info(f"Updated group name for {line_group_id} -> {new_name}")
