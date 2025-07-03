@@ -462,12 +462,22 @@ async def question_reminder_loop():
                                 else:
                                     print(f"★DEBUG: Failed to send reminder to {target_line_user_id}")
                     
-                    # 質問を解決済みとしてマーク（リマインド送信完了）
-                    supabase.table("questions").update({
-                        "resolved_at": datetime.now(timezone.utc).isoformat()
-                    }).eq("id", question['id']).execute()
+                    # 全ターゲットが返答済みか確認
+                    remaining_targets = supabase.table("question_targets") \
+                        .select("id") \
+                        .eq("question_id", question['id']) \
+                        .is_("responded_at", "null") \
+                        .execute()
                     
-                    print(f"★DEBUG: Marked question {question['id']} as resolved after sending reminders")
+                    if not remaining_targets.data:
+                        # 質問を解決済みとしてマーク（全ターゲットが返答済みの場合）
+                        supabase.table("questions").update({
+                            "resolved_at": datetime.now(timezone.utc).isoformat()
+                        }).eq("id", question['id']).execute()
+                        
+                        print(f"★DEBUG: Marked question {question['id']} as resolved after all targets responded")
+                    else:
+                        print(f"★DEBUG: Question {question['id']} still has unresolved targets")
                     
             except Exception as e:
                 print(f"★DEBUG: Question reminder processing failed for ID {question.get('id', 'unknown')}: {e}")
