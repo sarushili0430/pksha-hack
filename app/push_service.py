@@ -265,9 +265,14 @@ class PushService:
                 # メンション置換オブジェクトを作成
                 substitution_objects = []
                 for i, target in enumerate(mention_targets):
+                    # デバッグ用：メンション対象の情報をログ出力
+                    print(f"DEBUG: Creating substitution - key: member{i}, user_id: {target.user_id}")
+                    if not target.user_id or not target.user_id.startswith('U'):
+                        print(f"ERROR: Invalid LINE user ID: {target.user_id}")
+                    
                     substitution_objects.append(
                         MentionSubstitutionObject(
-                            key=f"{{member{i}}}",
+                            key=f"member{i}",
                             target=target
                         )
                     )
@@ -289,10 +294,12 @@ class PushService:
                 
         except ApiException as e:
             print(f"LINE API error sending mention message: {e}")
-            return False
+            print("Falling back to regular message without mentions")
+            return await self._send_push_message(target_id, message)
         except Exception as e:
             print(f"Error sending mention push message: {e}")
-            return False
+            print("Falling back to regular message without mentions")
+            return await self._send_push_message(target_id, message)
     
     async def _get_line_user_id(self, user_id: str) -> Optional[str]:
         """
