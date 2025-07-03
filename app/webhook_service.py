@@ -2,6 +2,7 @@ import logging
 from app.database_service import database_service
 from app.line_utils import line_utils
 from app.money_checker_service import money_checker_service
+from app.question_checker_service import question_checker_service
 
 logger = logging.getLogger(__name__)
 
@@ -22,9 +23,10 @@ class WebhookService:
             is_group_message = line_utils.is_group_chat_webhook(event_data)
             logger.info(f"Webhook is group message: {is_group_message}")
             
-            # グループメッセージの場合、支払いリクエストかどうかを判定
+            # グループメッセージの場合、支払いリクエストと質問を判定
             if is_group_message:
                 await money_checker_service.process_group_message(event_data)
+                await question_checker_service.process_group_message(event_data)
             
             # TODO: LLMメッセージチェック等の処理をここに追加
             
