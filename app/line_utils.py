@@ -146,5 +146,6 @@ class LineUtils:
         # sourceのtypeが"group"かつgroupIdが存在する場合はグループチャット
         return source_type == "group" and group_id is not None
 
+
 # シングルトンインスタンス
 line_utils = LineUtils()

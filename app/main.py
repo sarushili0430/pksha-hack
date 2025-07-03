@@ -3,7 +3,6 @@ from linebot.v3 import WebhookHandler
 from linebot.v3.messaging import Configuration
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 from linebot.v3.exceptions import InvalidSignatureError
-from app.function_executor import function_executor
 from app.webhook_service import webhook_service
 import os
 import logging
