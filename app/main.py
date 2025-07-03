@@ -7,8 +7,10 @@ from app.database_service import database_service
 import os
 import logging
 import json
+from dotenv import load_dotenv
 
 # Configure logging
+load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
