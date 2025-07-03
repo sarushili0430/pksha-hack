@@ -46,80 +46,99 @@ class LineUtils:
             logger.error(f"Error getting group members from LINE: {e}")
             return []
     
-    async def get_group_members_from_db(self, group_id: str) -> List[str]:
+    async def get_group_members_from_db(self, line_group_id: str) -> List[str]:
         """
-        データベースからグループメンバーのユーザーIDリストを取得
+        データベースからグループメンバーのLINE User IDリストを取得
         """
         try:
-            result = self.supabase.table("group_members").select("user_id").eq("group_id", group_id).execute()
+            # LINE Group IDからUUIDを取得
+            group_result = self.supabase.table("groups").select("id").eq("line_group_id", line_group_id).execute()
+            if not group_result.data:
+                logger.info(f"Group not found in database: {line_group_id}")
+                return []
+            
+            group_uuid = group_result.data[0]["id"]
+            
+            # グループメンバーのUUIDを取得してLINE User IDに変換
+            result = self.supabase.table("group_members").select(
+                "users(line_user_id)"
+            ).eq("group_id", group_uuid).execute()
             
             if result.data:
-                member_ids = [row["user_id"] for row in result.data]
-                logger.info(f"Retrieved {len(member_ids)} members from database for group {group_id}")
+                member_ids = [row["users"]["line_user_id"] for row in result.data if row["users"]]
+                logger.info(f"Retrieved {len(member_ids)} members from database for group {line_group_id}")
                 return member_ids
             else:
-                logger.info(f"No members found in database for group {group_id}")
+                logger.info(f"No members found in database for group {line_group_id}")
                 return []
                 
         except Exception as e:
             logger.error(f"Error getting group members from database: {e}")
             return []
     
-    async def get_group_members(self, group_id: str, force_refresh: bool = False) -> List[str]:
+    async def get_group_members(self, line_group_id: str, force_refresh: bool = False) -> List[str]:
         """
-        グループメンバーのユーザーIDリストを取得
+        グループメンバーのLINE User IDリストを取得
         デフォルトはデータベースから取得し、force_refreshがTrueの場合はLINE APIから取得
         """
         if force_refresh:
             # LINE APIから最新情報を取得
-            members = await self.get_group_members_from_line(group_id)
+            members = await self.get_group_members_from_line(line_group_id)
             
             # データベースを更新
             if members:
-                await self._sync_group_members_to_db(group_id, members)
+                await self._sync_group_members_to_db(line_group_id, members)
             
             return members
         else:
             # データベースから取得
-            members = await self.get_group_members_from_db(group_id)
+            members = await self.get_group_members_from_db(line_group_id)
             
             # データベースにメンバーがいない場合はLINE APIから取得
             if not members:
-                members = await self.get_group_members_from_line(group_id)
+                members = await self.get_group_members_from_line(line_group_id)
                 if members:
-                    await self._sync_group_members_to_db(group_id, members)
+                    await self._sync_group_members_to_db(line_group_id, members)
             
             return members
     
-    async def _sync_group_members_to_db(self, group_id: str, member_ids: List[str]) -> None:
+    async def _sync_group_members_to_db(self, line_group_id: str, line_member_ids: List[str]) -> None:
         """
         グループメンバー情報をデータベースに同期
         """
         try:
+            # Import database_service here to avoid circular imports
+            from .database_service import database_service
+            
+            # LINE Group IDをUUIDに変換
+            group_uuid = await database_service._ensure_group_exists(line_group_id)
+            
             # 既存のメンバーを削除
-            self.supabase.table("group_members").delete().eq("group_id", group_id).execute()
+            self.supabase.table("group_members").delete().eq("group_id", group_uuid).execute()
             
             # 新しいメンバーを追加
-            if member_ids:
-                members_data = [
-                    {"user_id": user_id, "group_id": group_id}
-                    for user_id in member_ids
-                ]
+            if line_member_ids:
+                members_data = []
+                for line_user_id in line_member_ids:
+                    # LINE User IDをUUIDに変換
+                    user_uuid = await database_service._ensure_user_exists(line_user_id)
+                    members_data.append({"user_id": user_uuid, "group_id": group_uuid})
+                
                 self.supabase.table("group_members").insert(members_data).execute()
-                logger.info(f"Synced {len(member_ids)} members to database for group {group_id}")
+                logger.info(f"Synced {len(line_member_ids)} members to database for group {line_group_id}")
                 
         except Exception as e:
             logger.error(f"Error syncing group members to database: {e}")
     
-    async def get_group_member_count(self, group_id: str) -> Optional[int]:
+    async def get_group_member_count(self, line_group_id: str) -> Optional[int]:
         """
         グループのメンバー数を取得
         """
         try:
-            response: GroupMemberCountResponse = self.messaging_api.get_group_members_count(group_id)
+            response: GroupMemberCountResponse = self.messaging_api.get_group_members_count(line_group_id)
             count = response.count
             
-            logger.info(f"Group {group_id} has {count} members")
+            logger.info(f"Group {line_group_id} has {count} members")
             return count
             
         except OpenApiException as e:

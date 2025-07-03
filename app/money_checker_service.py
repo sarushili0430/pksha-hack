@@ -84,30 +84,34 @@ class MoneyCheckerService:
             logger.error(f"Error in payment detection: {e}")
             return {"is_payment_request": False, "reason": f"Error: {str(e)}"}
     
-    async def save_payment_request(self, event_data: dict, amount: int, requester_user_id: str):
+    async def save_payment_request(self, event_data: dict, amount: int, requester_line_user_id: str):
         """
         支払いリクエストをデータベースに保存
         
         Args:
             event_data: LINEイベントデータ
             amount: 請求金額
-            requester_user_id: 請求者のユーザーID
+            requester_line_user_id: 請求者のLINE User ID
         """
         try:
             source = event_data.get("source", {})
-            group_id = source.get("groupId")
+            line_group_id = source.get("groupId")
             
-            if not group_id:
+            if not line_group_id:
                 logger.error("Group ID not found in event data")
                 return
+            
+            # LINE IDsをUUIDに変換
+            requester_user_uuid = await database_service._ensure_user_exists(requester_line_user_id)
+            group_uuid = await database_service._ensure_group_exists(line_group_id)
             
             # 60秒後にリマインドを設定
             remind_at = datetime.now() + timedelta(seconds=60)
             
             # データベースに保存
             money_request_data = {
-                "group_id": group_id,
-                "requester_user_id": requester_user_id,
+                "group_id": group_uuid,
+                "requester_user_id": requester_user_uuid,
                 "amount": amount,
                 "remind_at": remind_at.isoformat()
             }
