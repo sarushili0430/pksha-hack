@@ -303,10 +303,7 @@ class QuestionReminderService:
             )
             
             # リマインド本文（回答候補を含めない）
-            reminder_message = f"""
-{inactive_user_info['questioner_name']}さんから「{inactive_user_info['question_text']}」というメッセージが届いています。
-返信例を作成したので、コピペで返信できます。
-"""
+            reminder_message = f"{inactive_user_info['questioner_name']}さんから「{inactive_user_info['question_text']}」というメッセージが届いています。返信例を作成したので、コピペで返信できます。"
 
             # まずリマインド本文を送信
             success = await message_service.send_message_to_user(
