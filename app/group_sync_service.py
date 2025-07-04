@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from linebot.v3.messaging import AsyncApiClient, Configuration
 from linebot.v3.messaging.models import GroupSummaryResponse, GroupMemberCountResponse
-from linebot.v3.messaging.rest import AsyncApiException
+from linebot.v3.messaging.exceptions import OpenApiException
 from supabase import Client
 
 from app.line_user_profile_service import LineUserProfileService
@@ -67,9 +67,9 @@ class GroupSyncService:
         """LINEグループのメンバーIDリストを取得"""
         try:
             # グループメンバーのIDを取得
-            response = await self.line_client.get_group_members_ids(line_group_id)
+            response = await self.line_client.get_group_members_ids(line_group_id)  # type: ignore[attr-defined]
             return response.member_ids
-        except AsyncApiException as e:
+        except OpenApiException as e:
             logger.error(f"LINEグループメンバー取得エラー: {e}")
             raise
 
@@ -151,7 +151,7 @@ class GroupSyncService:
         """グループ情報を更新（グループ名など）"""
         try:
             # グループサマリーを取得
-            group_summary = await self.line_client.get_group_summary(line_group_id)
+            group_summary = await self.line_client.get_group_summary(line_group_id)  # type: ignore[attr-defined]
             
             # データベースを更新
             update_data = {}
@@ -161,15 +161,15 @@ class GroupSyncService:
             if update_data:
                 self.supabase.table("groups").update(update_data).eq("id", group_id).execute()
                 
-        except AsyncApiException as e:
+        except OpenApiException as e:
             logger.warning(f"グループ情報取得エラー: {e}")
 
     async def get_group_member_count(self, line_group_id: str) -> Optional[int]:
         """グループメンバー数を取得"""
         try:
-            response = await self.line_client.get_group_member_count(line_group_id)
+            response = await self.line_client.get_group_member_count(line_group_id)  # type: ignore[attr-defined]
             return response.count
-        except AsyncApiException as e:
+        except OpenApiException as e:
             logger.error(f"グループメンバー数取得エラー: {e}")
             return None
 

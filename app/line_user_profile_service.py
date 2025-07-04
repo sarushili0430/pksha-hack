@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 
 from linebot.v3.messaging import AsyncApiClient, Configuration
-from linebot.v3.messaging.rest import AsyncApiException
+from linebot.v3.messaging.exceptions import OpenApiException
 from supabase import create_client, Client
 
 logger = logging.getLogger(__name__)
@@ -48,7 +48,7 @@ class LineUserProfileService:
                 "status_message": getattr(profile, "status_message", None),
                 # 言語フィールドは v3 SDK には無いが、将来拡張を考慮
             }
-        except AsyncApiException as e:
+        except OpenApiException as e:
             logger.warning(f"LINE profile fetch failed for {line_user_id}: {e}")
             return None
         except Exception as e:
