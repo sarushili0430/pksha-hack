@@ -12,6 +12,7 @@ from app.database_service import database_service
 from app.message_service import message_service
 from app.ai_service import get_ai_service
 import os
+from app.line_user_profile_service import line_user_profile_service
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,16 @@ class QuestionReminderService:
             inactive_users = []
             
             for question in questions_result.data:
+                # 質問者の表示名を補完
+                questioner_name = question['users']['display_name']
+                if (not questioner_name) and line_user_profile_service:
+                    try:
+                        profile = await line_user_profile_service.get_user_profile_with_cache(question['users']['line_user_id'])
+                        questioner_name = (profile or {}).get("display_name") or "誰か"
+                    except Exception as e:
+                        logger.warning(f"Unable to fetch profile for questioner {question['users']['line_user_id']}: {e}")
+                        questioner_name = "誰か"
+
                 # 質問後にアクティブでないグループメンバーを探す
                 inactive_members = await self._find_inactive_group_members(
                     question['group_id'], 
@@ -69,14 +80,23 @@ class QuestionReminderService:
                 )
                 
                 for member in inactive_members:
+                    # 非アクティブユーザーの名前を補完
+                    inactive_name = member['display_name']
+                    if (not inactive_name) and line_user_profile_service:
+                        try:
+                            prof = await line_user_profile_service.get_user_profile_with_cache(member['line_user_id'])
+                            inactive_name = (prof or {}).get("display_name") or None
+                        except Exception as e:
+                            logger.debug(f"Profile fetch failed for inactive user {member['line_user_id']}: {e}")
+
                     inactive_users.append({
                         'question_id': question['id'],
                         'question_text': question['question_text'],
                         'group_name': question['groups']['group_name'],
                         'line_group_id': question['groups']['line_group_id'],
-                        'questioner_name': question['users']['display_name'],
+                        'questioner_name': questioner_name,
                         'inactive_user_id': member['line_user_id'],
-                        'inactive_user_name': member['display_name'],
+                        'inactive_user_name': inactive_name,
                         'question_created_at': question['created_at']
                     })
             
@@ -303,10 +323,7 @@ class QuestionReminderService:
             )
             
             # リマインド本文（回答候補を含めない）
-            reminder_message = f"""
-{inactive_user_info['questioner_name']}さんから「{inactive_user_info['question_text']}」というメッセージが届いています。
-返信例を作成したので、コピペで返信できます。
-"""
+            reminder_message = f"{inactive_user_info['questioner_name']}さんから「{inactive_user_info['question_text']}」というメッセージが届いています。返信例を作成したので、コピペで返信できます。"
 
             # まずリマインド本文を送信
             success = await message_service.send_message_to_user(
